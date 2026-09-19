@@ -1,0 +1,47 @@
+appId: com.caduzz.stackly
+productName: Stackly
+copyright: Copyright © 2026 Stackly Contributors
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**/*
+  - package.json
+  - "!**/*.map"
+
+asar: true
+asarUnpack:
+  - node_modules/better-sqlite3/**/*
+  - node_modules/node-pty/**/*
+
+npmRebuild: false
+removePackageScripts: true
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
+
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  target:
+    - dmg
+    - zip
+
+win:
+  icon: build/icon.png
+  target:
+    - nsis
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  icon: build/icon.png
+  category: Development
+  maintainer: Caduzz <caduzz@users.noreply.github.com>
+  executableName: stackly
+  target:
+    - AppImage
+
+publish: null
