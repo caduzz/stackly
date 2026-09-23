@@ -27,10 +27,12 @@ export class NetworkCollector {
   private starting: Promise<void> | null = null
   private enabled = false
   private ownedAttachment = false
+  private disposed = false
 
-  constructor(private readonly contents: WebContents, private readonly ready: Promise<void> = Promise.resolve(), private readonly onChange: () => void = () => {}) {}
+  constructor(private readonly contents: WebContents, private readonly ready: Promise<void> = Promise.resolve(), private readonly onChange: () => void = () => {}, private readonly ensureAttached?: () => Promise<void>, private readonly preserveLog: () => boolean = () => false) {}
 
   private readonly onMessage = (_event: Electron.Event, method: string, raw: unknown): void => {
+    if (this.disposed) return
     if (method === 'Network.requestWillBeSent') {
       const event = raw as RequestEvent
       const entry: NetworkEntry = {
@@ -77,6 +79,12 @@ export class NetworkCollector {
     this.ownedAttachment = false
     this.contents.debugger.removeListener('message', this.onMessage)
     this.contents.debugger.removeListener('detach', this.onDetach)
+    this.contents.removeListener('did-start-navigation', this.onNavigationStarted)
+  }
+
+  private readonly onNavigationStarted = (_event: Electron.Event, _url: string, isInPlace: boolean, isMainFrame: boolean): void => {
+    if (!isMainFrame || isInPlace || this.preserveLog()) return
+    this.clear()
   }
 
   async start(): Promise<void> {
@@ -88,13 +96,21 @@ export class NetworkCollector {
 
   private async enable(): Promise<void> {
     await this.ready
+    if (this.disposed) throw new Error('Network collector is disposed')
     if (this.contents.isDestroyed()) throw new Error('Tab is closed')
     const debuggerApi = this.contents.debugger
-    if (debuggerApi.isAttached()) throw new Error('Debugger is already attached')
-    debuggerApi.attach('1.3')
-    this.ownedAttachment = true
+    if (this.ensureAttached) await this.ensureAttached()
+    else {
+      if (debuggerApi.isAttached()) throw new Error('Debugger is already attached')
+      debuggerApi.attach('1.3')
+      this.ownedAttachment = true
+    }
+    debuggerApi.removeListener('message', this.onMessage)
+    debuggerApi.removeListener('detach', this.onDetach)
+    this.contents.removeListener('did-start-navigation', this.onNavigationStarted)
     debuggerApi.on('message', this.onMessage)
     debuggerApi.on('detach', this.onDetach)
+    this.contents.on('did-start-navigation', this.onNavigationStarted)
     try {
       await debuggerApi.sendCommand('Network.enable')
       this.enabled = true
@@ -112,14 +128,23 @@ export class NetworkCollector {
     }))
   }
 
+  clear(): void {
+    this.entries.clear()
+    this.startedAt.clear()
+    this.onChange()
+  }
+
   dispose(): void {
+    this.disposed = true
     if (this.contents.isDestroyed()) return
     const debuggerApi = this.contents.debugger
     debuggerApi.removeListener('message', this.onMessage)
     debuggerApi.removeListener('detach', this.onDetach)
+    this.contents.removeListener('did-start-navigation', this.onNavigationStarted)
     if (this.ownedAttachment && debuggerApi.isAttached()) debuggerApi.detach()
     this.enabled = false
     this.ownedAttachment = false
+    this.entries.clear()
     this.startedAt.clear()
   }
 }

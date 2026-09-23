@@ -15,10 +15,15 @@ export function CommandPalette({ commands, onClose }: Props): React.JSX.Element 
     for (const command of matches) grouped.set(command.category, [...(grouped.get(command.category) ?? []), command])
     return [...grouped.entries()]
   }, [matches])
+  const visibleCommands = useMemo(() => groups.flatMap(([, categoryCommands]) => categoryCommands), [groups])
 
   useEffect(() => {
     optionRefs.current[activeIndex]?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex, matches])
+  }, [activeIndex, visibleCommands])
+
+  useEffect(() => {
+    setActiveIndex((index) => Math.min(index, Math.max(visibleCommands.length - 1, 0)))
+  }, [visibleCommands])
 
   useEffect(() => {
     const previous = document.activeElement
@@ -50,13 +55,13 @@ export function CommandPalette({ commands, onClose }: Props): React.JSX.Element 
       onClose()
     } else if (event.key === 'ArrowDown') {
       event.preventDefault()
-      setActiveIndex((index) => Math.min(index + 1, matches.length - 1))
+      setActiveIndex((index) => Math.min(index + 1, visibleCommands.length - 1))
     } else if (event.key === 'ArrowUp') {
       event.preventDefault()
       setActiveIndex((index) => Math.max(index - 1, 0))
-    } else if (event.key === 'Enter' && matches[activeIndex]) {
+    } else if (event.key === 'Enter' && visibleCommands[activeIndex]) {
       event.preventDefault()
-      run(matches[activeIndex])
+      run(visibleCommands[activeIndex])
     }
   }
 
@@ -64,7 +69,7 @@ export function CommandPalette({ commands, onClose }: Props): React.JSX.Element 
     <div className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette">
       <div className="palette-search">
         <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-        <input ref={inputRef} aria-label="Search commands" role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={matches[activeIndex] ? `command-${matches[activeIndex].id}` : undefined} placeholder="Search commands" value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0) }} onKeyDown={onKeyDown} />
+        <input ref={inputRef} aria-label="Search commands" role="combobox" aria-controls="command-results" aria-expanded="true" aria-activedescendant={visibleCommands[activeIndex] ? `command-${visibleCommands[activeIndex].id}` : undefined} placeholder="Search commands" value={query} onChange={(event) => { setQuery(event.target.value); setActiveIndex(0) }} onKeyDown={onKeyDown} />
         <kbd>Esc</kbd>
       </div>
       <div id="command-results" className="palette-results" role="listbox" aria-label="Commands">
@@ -72,7 +77,7 @@ export function CommandPalette({ commands, onClose }: Props): React.JSX.Element 
         {groups.map(([category, categoryCommands]) => <section className="palette-group" key={category} role="group" aria-labelledby={`command-category-${category.replaceAll(' ', '-').toLowerCase()}`}>
           <h3 id={`command-category-${category.replaceAll(' ', '-').toLowerCase()}`}>{category}</h3>
           {categoryCommands.map((command) => {
-            const index = matches.indexOf(command)
+            const index = visibleCommands.indexOf(command)
             return <button ref={(node) => { optionRefs.current[index] = node }} id={`command-${command.id}`} key={command.id} type="button" role="option" aria-selected={index === activeIndex} className={`palette-command${index === activeIndex ? ' is-active' : ''}`} onMouseEnter={() => setActiveIndex(index)} onClick={() => run(command)}>
               <span>{command.label}</span>{command.shortcut && <kbd>{command.shortcut}</kbd>}
             </button>

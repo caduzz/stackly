@@ -18,6 +18,11 @@ export function TooltipLayer(): React.JSX.Element | null {
   const tooltipRef = useRef<HTMLDivElement>(null)
   const timer = useRef<number | null>(null)
 
+  useEffect(() => {
+    void window.devBrowser.layout.setTooltipOpen(Boolean(source)).catch(console.error)
+    return () => { void window.devBrowser.layout.setTooltipOpen(false).catch(console.error) }
+  }, [source])
+
   useLayoutEffect(() => {
     const tooltip = tooltipRef.current
     if (!source || !tooltip) return

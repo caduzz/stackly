@@ -23,22 +23,23 @@ async function readLimited(response: Response): Promise<string> {
   return new TextDecoder().decode(bytes)
 }
 
-export async function sendApiRequest(request: ApiRequest): Promise<ApiResponse> {
+export async function sendApiRequest(request: ApiRequest, signal?: AbortSignal): Promise<ApiResponse> {
   const url = new URL(request.url)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Only HTTP(S) URLs without embedded credentials are supported')
   if (request.method === 'GET' && request.body.trim()) throw new Error('GET requests cannot have a body')
   const headers = new Headers(request.headers)
   if (request.body.trim()) {
-    try { JSON.parse(request.body) } catch { throw new Error('Request body is not valid JSON') }
-    if (!headers.has('content-type')) headers.set('content-type', 'application/json')
+    const looksJson = /^[\[{]/.test(request.body.trim())
+    if (looksJson && !headers.has('content-type')) headers.set('content-type', 'application/json')
   }
+  const timeout = AbortSignal.timeout(30_000)
   const started = performance.now()
   const response = await fetch(url, {
     method: request.method,
     headers,
     body: request.body.trim() || undefined,
     credentials: 'omit',
-    signal: AbortSignal.timeout(30_000)
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout
   })
   const body = await readLimited(response)
   return {

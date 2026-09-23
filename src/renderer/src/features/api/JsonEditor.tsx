@@ -17,6 +17,10 @@ export function JsonEditor({ value, onChange, readOnly = false }: Props): React.
   onChangeRef.current = onChange
 
   useEffect(() => { editorRef.current?.updateOptions({ readOnly }) }, [readOnly])
+  useEffect(() => {
+    const editor = editorRef.current
+    if (editor && editor.getValue() !== value) editor.setValue(value)
+  }, [value])
 
   useEffect(() => {
     const node = container.current

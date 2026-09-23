@@ -2,15 +2,15 @@ import { dialog, type BrowserWindow, type WebContents } from 'electron'
 import { writeFile } from 'node:fs/promises'
 import type { ScreenshotResult } from '../../shared/contracts/browser'
 
-function defaultFilename(): string {
+function defaultFilename(prefix = 'stackly'): string {
   const timestamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d{3}Z$/, 'Z')
-  return `stackly-${timestamp}.png`
+  return `${prefix}-${timestamp}.png`
 }
 
-export async function captureScreenshot(window: BrowserWindow, contents: WebContents): Promise<ScreenshotResult> {
+export async function captureScreenshot(window: BrowserWindow, contents: WebContents, filenamePrefix = 'stackly'): Promise<ScreenshotResult> {
   const selection = await dialog.showSaveDialog(window, {
     title: 'Save Screenshot',
-    defaultPath: defaultFilename(),
+    defaultPath: defaultFilename(filenamePrefix),
     buttonLabel: 'Save',
     filters: [{ name: 'PNG Image', extensions: ['png'] }]
   })
