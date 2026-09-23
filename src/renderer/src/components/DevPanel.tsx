@@ -8,8 +8,9 @@ import { ApiClient } from '../features/api/ApiClient'
 import { TerminalPanel } from '../features/terminal/TerminalPanel'
 import { ErrorCenter } from '../features/errors/ErrorCenter'
 import { ElementsInspector } from '../features/elements/ElementsInspector'
+import { ProtectedContentDiagnostics } from '../features/drm/ProtectedContentDiagnostics'
 
-export type DevPanelKind = 'elements' | 'errors' | 'network' | 'console' | 'storage' | 'api' | 'terminal'
+export type DevPanelKind = 'elements' | 'errors' | 'network' | 'console' | 'storage' | 'api' | 'terminal' | 'drm'
 
 const panels: { id: DevPanelKind; label: string }[] = [
   { id: 'elements', label: 'Elements' },
@@ -17,6 +18,7 @@ const panels: { id: DevPanelKind; label: string }[] = [
   { id: 'network', label: 'Network' },
   { id: 'console', label: 'Console' },
   { id: 'storage', label: 'Storage' },
+  { id: 'drm', label: 'DRM' },
   { id: 'api', label: 'API' },
   { id: 'terminal', label: 'Terminal' }
 ]
@@ -39,7 +41,7 @@ function heightLimits(): { min: number; max: number } {
 
 export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, onClose, networkKey, targetAvailable, targetLabel, targetReady }: Props): React.JSX.Element {
   const drag = useRef<{ y: number; height: number } | null>(null)
-  const tabRefs = useRef<Record<DevPanelKind, HTMLButtonElement | null>>({ elements: null, errors: null, network: null, console: null, storage: null, api: null, terminal: null })
+  const tabRefs = useRef<Record<DevPanelKind, HTMLButtonElement | null>>({ elements: null, errors: null, network: null, console: null, storage: null, api: null, terminal: null, drm: null })
   const limits = heightLimits()
 
   useEffect(() => () => {
@@ -69,7 +71,7 @@ export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, o
     tabRefs.current[panels[next].id]?.focus()
   }
 
-  const needsChromiumTarget = activePanel === 'elements' || activePanel === 'errors' || activePanel === 'network' || activePanel === 'console' || activePanel === 'storage'
+  const needsChromiumTarget = activePanel === 'elements' || activePanel === 'errors' || activePanel === 'network' || activePanel === 'console' || activePanel === 'storage' || activePanel === 'drm'
 
   return <section className="shell-dev-panel" style={{ height: Math.min(height, limits.max) }} aria-label="Development panel">
     <div
@@ -123,7 +125,7 @@ export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, o
         ? <div className="dev-panel-empty-target">Select a Chromium target to inspect.</div>
         : needsChromiumTarget && !targetReady
           ? <div className="dev-panel-empty-target">Binding Dev Panel target...</div>
-          : activePanel === 'elements' ? <ElementsInspector key={networkKey} /> : activePanel === 'errors' ? <ErrorCenter key={networkKey} targetLabel={targetLabel} onOpenPanel={onPanelChange} /> : activePanel === 'network' ? <NetworkInspector key={networkKey} /> : activePanel === 'console' ? <ConsoleInspector key={networkKey} /> : activePanel === 'storage' ? <StorageInspector key={networkKey} /> : activePanel === 'api' ? <ApiClient /> : <TerminalPanel />}
+          : activePanel === 'elements' ? <ElementsInspector key={networkKey} /> : activePanel === 'errors' ? <ErrorCenter key={networkKey} targetLabel={targetLabel} onOpenPanel={onPanelChange} /> : activePanel === 'network' ? <NetworkInspector key={networkKey} /> : activePanel === 'console' ? <ConsoleInspector key={networkKey} /> : activePanel === 'storage' ? <StorageInspector key={networkKey} /> : activePanel === 'drm' ? <ProtectedContentDiagnostics key={networkKey} /> : activePanel === 'api' ? <ApiClient /> : <TerminalPanel />}
     </div>
   </section>
 }

@@ -254,6 +254,59 @@ export type DownloadEntry = z.infer<typeof downloadEntrySchema>
 export const screenshotResultSchema = z.enum(['saved', 'cancelled'])
 export type ScreenshotResult = z.infer<typeof screenshotResultSchema>
 
+export const protectedContentDiagnosticsSchema = z.strictObject({
+  runtime: z.strictObject({
+    electron: z.string(),
+    chromium: z.string(),
+    node: z.string(),
+    platform: z.string(),
+    arch: z.string(),
+    castlabsComponentsApi: z.boolean()
+  }),
+  components: z.strictObject({
+    available: z.boolean(),
+    status: z.unknown().nullable()
+  }),
+  target: z.strictObject({
+    url: z.string(),
+    webContentsId: z.number().int().positive()
+  }).nullable(),
+  browserIdentity: z.strictObject({
+    userAgent: z.string(),
+    platform: z.string(),
+    language: z.string(),
+    languages: z.array(z.string()),
+    vendor: z.string(),
+    brands: z.array(z.strictObject({ brand: z.string(), version: z.string() })).optional(),
+    mobile: z.boolean().optional()
+  }).nullable(),
+  pageSignals: z.strictObject({
+    title: z.string(),
+    detectedErrorCodes: z.array(z.string())
+  }),
+  eme: z.strictObject({
+    hasRequestMediaKeySystemAccess: z.boolean(),
+    hdcpPolicyStatus: z.string().optional(),
+    hdcpPolicyError: z.string().optional()
+  }),
+  widevine: z.strictObject({
+    available: z.boolean(),
+    keySystem: z.string().optional(),
+    configuration: z.unknown().optional(),
+    errorName: z.string().optional(),
+    errorMessage: z.string().optional()
+  }),
+  media: z.strictObject({
+    avcHighMp4: z.boolean(),
+    aacMp4: z.boolean(),
+    vp9Webm: z.boolean(),
+    av1Mp4: z.boolean()
+  }),
+  errors: z.array(z.string()),
+  notes: z.array(z.string())
+})
+export type ProtectedContentDiagnostics = z.infer<typeof protectedContentDiagnosticsSchema>
+
 export const workspaceIdSchema = z.uuid()
 export const environmentIdSchema = z.uuid()
 export const workspaceNameSchema = z.string().trim().min(1).max(60)
@@ -476,6 +529,7 @@ export const browserChannels = {
   getDownloads: 'browser:downloads:get',
   downloadsChanged: 'browser:downloads:changed',
   captureScreenshot: 'browser:screenshot:capture',
+  getProtectedContentDiagnostics: 'browser:drm:get-diagnostics',
   getSettings: 'browser:settings:get',
   updateSettings: 'browser:settings:update',
   generateThemeFromImage: 'browser:settings:theme-from-image',
@@ -599,6 +653,7 @@ export type DevBrowserApi = {
     onChange: (listener: (entries: DownloadEntry[]) => void) => () => void
   }
   screenshots: { capture: () => Promise<ScreenshotResult> }
+  drm: { getDiagnostics: () => Promise<ProtectedContentDiagnostics> }
   settings: {
     get: () => Promise<BrowserSettings>
     update: (settings: BrowserSettings) => Promise<BrowserSettings>
