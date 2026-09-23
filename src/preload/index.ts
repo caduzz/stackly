@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { apiRequestIdSchema, apiRequestSchema, apiResponseSchema, apiSendRequestSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleEntrySchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, defaultStartupConfig, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, deviceViewSnapshotSchema, downloadEntrySchema, elementNodeIdSchema, elementsSnapshotSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, imageThemeResultSchema, localServiceSchema, navigateSchema, navigationHistoryEntrySchema, navigationHistoryVisitSchema, navigationStateSchema, networkEntrySchema, protectedContentDiagnosticsSchema, screenshotResultSchema, splitViewSchema, startupConfigSchema, storageMutationSchema, storageSnapshotSchema, tabIdSchema, tabOrderSchema, tabsSnapshotSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalDataSchema, terminalExitSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema, workspacesSnapshotSchema, type DevBrowserApi } from '../shared/contracts/browser'
+import { apiRequestIdSchema, apiRequestSchema, apiResponseSchema, apiSendRequestSchema, audioCenterCommandSchema, audioCenterSessionIdSchema, audioCenterSessionSchema, audioCenterTargetSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleEntrySchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, defaultStartupConfig, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, deviceViewSnapshotSchema, downloadEntrySchema, elementNodeIdSchema, elementsSnapshotSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, imageThemeResultSchema, localServiceSchema, navigateSchema, navigationHistoryEntrySchema, navigationHistoryVisitSchema, navigationStateSchema, networkEntrySchema, protectedContentDiagnosticsSchema, screenshotResultSchema, splitViewSchema, startupConfigSchema, storageMutationSchema, storageSnapshotSchema, tabIdSchema, tabOrderSchema, tabsSnapshotSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalDataSchema, terminalExitSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema, workspacesSnapshotSchema, type DevBrowserApi } from '../shared/contracts/browser'
 import { gitBranchOperationSchema, gitBranchSchema, gitChannels, gitCommitRequestSchema, gitCommitResultSchema, gitCommitSchema, gitConnectRepositoryResultSchema, gitFileDiffRequestSchema, gitFileDiffSchema, gitFileOperationSchema, gitRemoteOperationResultSchema, gitRepositorySchema, gitRepositoryStatusCountsSchema, gitStatusSummarySchema } from '../shared/contracts/git'
 import { githubActionsRunListRequestSchema, githubActionsRunPageSchema, githubChannels, githubIssueListRequestSchema, githubIssuePageSchema, githubProviderStatusSchema, githubPullRequestCreateRequestSchema, githubPullRequestCreateResultSchema, githubPullRequestDetailRequestSchema, githubPullRequestDetailSchema, githubPullRequestListRequestSchema, githubPullRequestPageSchema, githubRepositoryMetadataSchema, githubRepositoryRequestSchema } from '../shared/contracts/github'
 
@@ -234,6 +234,24 @@ const api: DevBrowserApi = {
       }
       ipcRenderer.on(browserChannels.downloadsChanged, handler)
       return () => ipcRenderer.removeListener(browserChannels.downloadsChanged, handler)
+    }
+  },
+  audio: {
+    registerTarget: async (target) => {
+      await ipcRenderer.invoke(browserChannels.registerAudioTarget, audioCenterTargetSchema.parse(target))
+    },
+    getSessions: async () => audioCenterSessionSchema.array().parse(await ipcRenderer.invoke(browserChannels.getAudioSessions)),
+    command: async (command) => {
+      await ipcRenderer.invoke(browserChannels.audioCommand, audioCenterCommandSchema.parse(command))
+    },
+    goToSource: async (sessionId) => audioCenterSessionSchema.nullable().parse(await ipcRenderer.invoke(browserChannels.goToAudioSource, audioCenterSessionIdSchema.parse(sessionId))),
+    onSessionsChanged: (listener) => {
+      const handler = (_event: Electron.IpcRendererEvent, raw: unknown): void => {
+        const parsed = audioCenterSessionSchema.array().safeParse(raw)
+        if (parsed.success) listener(parsed.data)
+      }
+      ipcRenderer.on(browserChannels.audioSessionsChanged, handler)
+      return () => ipcRenderer.removeListener(browserChannels.audioSessionsChanged, handler)
     }
   },
   screenshots: { capture: async () => screenshotResultSchema.parse(await ipcRenderer.invoke(browserChannels.captureScreenshot)) },

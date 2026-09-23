@@ -11,6 +11,7 @@ import { IconButton } from './components/IconButton'
 import { TabBar, type InternalTab } from './components/TabBar'
 import { LocalServicesPopover } from './components/LocalServicesPopover'
 import { DownloadsPopover } from './components/DownloadsPopover'
+import { AudioCenterPopover } from './components/AudioCenterPopover'
 import { DeviceToolbar } from './components/DeviceToolbar'
 import { HistoryPanel } from './components/HistoryPanel'
 import { SettingsPanel } from './components/SettingsPanel'
@@ -112,6 +113,7 @@ function Toolbar({ settings, onOpenHistory, onOpenSettings }: { settings: Browse
         await browserDom.navigate(address)
       })} />
       {settings.features.showDownloads && <DownloadsPopover />}
+      <AudioCenterPopover />
       <IconButton icon={ExternalLink} aria-label="Open in system browser" title="Open in system browser" disabled={!currentUrl} onClick={() => {
         if (!currentUrl) return
         void window.devBrowser.navigation.openExternal(currentUrl).catch(() => setStatus('Could not open system browser'))
@@ -240,6 +242,33 @@ function webviewSource(url: string): string {
   return url || 'about:blank'
 }
 
+function registerAudioTargetForWebview({ kind, workspace, tab, webview, device }: { kind: 'tab' | 'device'; workspace: Workspace; tab: TabState; webview: BrowserWebviewElement; device?: VirtualDevice }): void {
+  let webContentsId: number
+  try {
+    webContentsId = webview.getWebContentsId()
+  } catch {
+    return
+  }
+  let currentUrl = tab.url
+  try {
+    const viewUrl = webview.getURL()
+    currentUrl = viewUrl && viewUrl !== 'about:blank' ? viewUrl : currentUrl
+  } catch { /* Best-effort metadata for attaching webviews. */ }
+  void window.devBrowser.audio.registerTarget({
+    kind,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
+    tabId: tab.id,
+    tabTitle: tab.title || 'New Tab',
+    deviceId: device?.id ?? null,
+    deviceName: device?.name ?? null,
+    webContentsId,
+    url: currentUrl,
+    favicon: tab.favicon,
+    muted: tab.isMuted
+  }).catch(console.error)
+}
+
 function isIntentionalNavigationCancel(error: unknown): boolean {
   return error instanceof Error && (error.message.includes('ERR_ABORTED') || error.message.includes('ERR_FAILED'))
 }
@@ -248,8 +277,12 @@ function failureMessage(description: unknown): string {
   return typeof description === 'string' && description.trim() ? description : 'The page could not be loaded.'
 }
 
-function BrowserWebview({ workspaceId, tabId, url, active, partition, register }: { workspaceId: string; tabId: string; url: string; active: boolean; partition: string; register: (id: string, view: BrowserWebviewElement | null) => void }): React.JSX.Element {
+function BrowserWebview({ workspace, tab, active, partition, register }: { workspace: Workspace; workspaceId?: string; tab: TabState; tabId?: string; url?: string; active: boolean; partition: string; register: (id: string, view: BrowserWebviewElement | null) => void }): React.JSX.Element {
+  const { id: tabId, url } = tab
+  const workspaceId = workspace.id
   const ref = useRef<BrowserWebviewElement>(null)
+  const tabRef = useRef(tab)
+  const workspaceRef = useRef(workspace)
   const desiredUrl = useRef(url)
   const wasActive = useRef(false)
   const navigationSeq = useRef(0)
@@ -281,8 +314,10 @@ function BrowserWebview({ workspaceId, tabId, url, active, partition, register }
   }
 
   useEffect(() => {
+    tabRef.current = tab
+    workspaceRef.current = workspace
     desiredUrl.current = url
-  }, [url])
+  }, [tab, url, workspace])
 
   useEffect(() => {
     const view = ref.current
@@ -386,6 +421,7 @@ function BrowserWebview({ workspaceId, tabId, url, active, partition, register }
     const domReady = (): void => {
       setReady(true)
       register(viewKey, webview)
+      registerAudioTargetForWebview({ kind: 'tab', workspace: workspaceRef.current, tab: tabRef.current, webview })
       const pendingUrl = desiredUrl.current
       if (pendingUrl) {
         let currentUrl = ''
@@ -399,7 +435,10 @@ function BrowserWebview({ workspaceId, tabId, url, active, partition, register }
       } else statePatch()
     }
     const start = (): void => statePatch(true)
-    const stop = (): void => statePatch(false)
+    const stop = (): void => {
+      statePatch(false)
+      registerAudioTargetForWebview({ kind: 'tab', workspace: workspaceRef.current, tab: tabRef.current, webview })
+    }
     const navigate = (): void => {
       try {
         const currentUrl = webview.getURL()
@@ -416,6 +455,7 @@ function BrowserWebview({ workspaceId, tabId, url, active, partition, register }
     const favicon = (event: WebviewFaviconEvent): void => {
       if (!isCurrentWorkspace()) return
       void window.devBrowser.tabs.updateState({ id: tabId, favicon: event.favicons?.[0] }).catch(console.error)
+      registerAudioTargetForWebview({ kind: 'tab', workspace: workspaceRef.current, tab: { ...tabRef.current, favicon: event.favicons?.[0] }, webview })
     }
     const failLoad = (event: WebviewFailLoadEvent): void => {
       if (event.isMainFrame === false || event.errorCode === -3) return
@@ -443,7 +483,9 @@ function BrowserWebview({ workspaceId, tabId, url, active, partition, register }
     return () => {
       setReady(false)
       register(viewKey, null)
-      if (isCurrentWorkspace()) void window.devBrowser.tabs.setWebContentsTarget({ tabId, webContentsId: null }).catch(console.error)
+      void window.devBrowser.tabs.setWebContentsTarget({ workspaceId, tabId, webContentsId: null }).catch(console.error)
+      const currentTab = tabRef.current
+      void window.devBrowser.audio.registerTarget({ kind: 'tab', workspaceId, workspaceName: workspaceRef.current.name, tabId, tabTitle: currentTab.title || 'New Tab', deviceId: null, deviceName: null, webContentsId: null, url: currentTab.url, favicon: currentTab.favicon, muted: currentTab.isMuted }).catch(console.error)
       webview.removeEventListener('dom-ready', domReady)
       webview.removeEventListener('did-start-loading', start)
       webview.removeEventListener('did-stop-loading', stop)
@@ -466,12 +508,19 @@ function BrowserWebview({ workspaceId, tabId, url, active, partition, register }
     } catch {
       return
     }
-    void window.devBrowser.tabs.setWebContentsTarget({ tabId, webContentsId }).catch(console.error)
+    void window.devBrowser.tabs.setWebContentsTarget({ workspaceId, tabId, webContentsId }).catch(console.error)
+    registerAudioTargetForWebview({ kind: 'tab', workspace: workspaceRef.current, tab: tabRef.current, webview: view })
     try {
       const currentUrl = view.getURL() === 'about:blank' ? '' : view.getURL()
       if (currentUrl) void window.devBrowser.tabs.updateState({ id: tabId, url: currentUrl, title: view.getTitle() || new URL(currentUrl).hostname, isLoading: view.isLoading(), canGoBack: view.canGoBack(), canGoForward: view.canGoForward() }).catch(console.error)
     } catch { /* Webview state is best-effort while Electron attaches it. */ }
-  }, [active, ready, tabId])
+  }, [active, ready, tabId, workspaceId])
+
+  useEffect(() => {
+    const view = ref.current
+    if (!view || !ready) return
+    registerAudioTargetForWebview({ kind: 'tab', workspace, tab, webview: view })
+  }, [ready, tab.favicon, tab.isMuted, tab.title, tab.url, workspace.id, workspace.name])
 
   useEffect(() => {
     const view = ref.current
@@ -675,10 +724,13 @@ function DeviceSettingsPopover({ device, environments, onApply, onClose }: { dev
   </form>
 }
 
-function DeviceFrame({ device, environments, isMuted, partition, tabId, zoom, onApplySettings, onCaptureScreenshot, onMove, onNavigate, onRemove, onResize, onRotate, onSelect }: { device: VirtualDevice; environments: Environment[]; isMuted: boolean; partition: string; tabId: string | null; zoom: number; onApplySettings: (id: string, patch: Partial<Omit<VirtualDevice, 'id'>>) => void; onCaptureScreenshot: (id: string, view: BrowserWebviewElement | null) => void; onMove: (id: string, position: { x: number; y: number }) => void; onNavigate: (id: string, url: string) => void; onRemove: (id: string) => void; onResize: (id: string, displayScale: number) => void; onRotate: (id: string) => void; onSelect: (id: string) => void }): React.JSX.Element {
+function DeviceFrame({ device, environments, isMuted, partition, tab, workspace, zoom, onApplySettings, onCaptureScreenshot, onMove, onNavigate, onRemove, onResize, onRotate, onSelect }: { device: VirtualDevice; environments: Environment[]; isMuted: boolean; partition: string; tab: TabState; tabId?: string | null; workspace: Workspace; zoom: number; onApplySettings: (id: string, patch: Partial<Omit<VirtualDevice, 'id'>>) => void; onCaptureScreenshot: (id: string, view: BrowserWebviewElement | null) => void; onMove: (id: string, position: { x: number; y: number }) => void; onNavigate: (id: string, url: string) => void; onRemove: (id: string) => void; onResize: (id: string, displayScale: number) => void; onRotate: (id: string) => void; onSelect: (id: string) => void }): React.JSX.Element {
   const drag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null)
   const resize = useRef<{ pointerId: number; pointerX: number; pointerY: number; originScale: number } | null>(null)
   const webviewRef = useRef<BrowserWebviewElement | null>(null)
+  const deviceRef = useRef(device)
+  const tabRef = useRef(tab)
+  const workspaceRef = useRef(workspace)
   const navigationSeq = useRef(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [failure, setFailure] = useState<LoadFailure | null>(null)
@@ -692,8 +744,11 @@ function DeviceFrame({ device, environments, isMuted, partition, tabId, zoom, on
   const environment = environments.find((item) => item.id === device.environmentId) ?? null
 
   useEffect(() => {
+    deviceRef.current = device
+    tabRef.current = tab
+    workspaceRef.current = workspace
     setAddress(device.url)
-  }, [device.url])
+  }, [device, tab, workspace])
 
   function startDrag(event: React.PointerEvent<HTMLElement>): void {
     if (event.button !== 0) return
@@ -764,10 +819,12 @@ function DeviceFrame({ device, environments, isMuted, partition, tabId, zoom, on
     const start = (): void => setNavigationState({ canGoBack: webview.canGoBack(), canGoForward: webview.canGoForward(), isLoading: true })
     const domReady = (): void => {
       delete webview.dataset.stacklyLoadingUrl
+      registerAudioTargetForWebview({ kind: 'device', workspace: workspaceRef.current, tab: tabRef.current, device: deviceRef.current, webview })
     }
     const stop = (): void => {
       delete webview.dataset.stacklyLoadingUrl
       syncUrl()
+      registerAudioTargetForWebview({ kind: 'device', workspace: workspaceRef.current, tab: tabRef.current, device: deviceRef.current, webview })
     }
     const failLoad = (event: Event): void => {
       const fail = event as WebviewFailLoadEvent
@@ -787,6 +844,9 @@ function DeviceFrame({ device, environments, isMuted, partition, tabId, zoom, on
     webview.addEventListener('did-fail-load', failLoad)
     webview.addEventListener('did-fail-provisional-load', failLoad)
     return () => {
+      const currentDevice = deviceRef.current
+      const currentTab = tabRef.current
+      void window.devBrowser.audio.registerTarget({ kind: 'device', workspaceId: workspaceRef.current.id, workspaceName: workspaceRef.current.name, tabId: currentTab.id, tabTitle: currentTab.title || 'Device Tab', deviceId: currentDevice.id, deviceName: currentDevice.name, webContentsId: null, url: currentDevice.url, favicon: currentTab.favicon, muted: currentTab.isMuted }).catch(console.error)
       webview.removeEventListener('dom-ready', domReady)
       webview.removeEventListener('did-start-loading', start)
       webview.removeEventListener('did-stop-loading', stop)
@@ -795,7 +855,13 @@ function DeviceFrame({ device, environments, isMuted, partition, tabId, zoom, on
       webview.removeEventListener('did-fail-load', failLoad)
       webview.removeEventListener('did-fail-provisional-load', failLoad)
     }
-  }, [device.id, device.url, onNavigate, tabId])
+  }, [device.id, device.url, onNavigate, tab.id, workspace.id])
+
+  useEffect(() => {
+    const webview = webviewRef.current
+    if (!webview) return
+    registerAudioTargetForWebview({ kind: 'device', workspace, tab, device, webview })
+  }, [device, tab.favicon, tab.isMuted, tab.title, workspace.id, workspace.name])
 
   useEffect(() => {
     try {
@@ -894,7 +960,7 @@ function DeviceFrame({ device, environments, isMuted, partition, tabId, zoom, on
   </article>
 }
 
-function CanvasViewport({ activeTabId, devices, environments, isMuted, pan, partition, spacePressed, viewportRef, zoom, onAddClick, onApplySettings, onCaptureScreenshot, onMove, onNavigate, onPan, onRemove, onResize, onRotate, onSelect }: { activeTabId: string | null; devices: VirtualDevice[]; environments: Environment[]; isMuted: boolean; pan: { x: number; y: number }; partition: string; spacePressed: boolean; viewportRef: React.RefObject<HTMLDivElement | null>; zoom: number; onAddClick: () => void; onApplySettings: (id: string, patch: Partial<Omit<VirtualDevice, 'id'>>) => void; onCaptureScreenshot: (id: string, view: BrowserWebviewElement | null) => void; onMove: (id: string, position: { x: number; y: number }) => void; onNavigate: (id: string, url: string) => void; onPan: (pan: { x: number; y: number }) => void; onRemove: (id: string) => void; onResize: (id: string, displayScale: number) => void; onRotate: (id: string) => void; onSelect: (id: string | null) => void }): React.JSX.Element {
+function CanvasViewport({ activeTab, activeTabId, devices, environments, isMuted, pan, partition, spacePressed, viewportRef, workspace, zoom, onAddClick, onApplySettings, onCaptureScreenshot, onMove, onNavigate, onPan, onRemove, onResize, onRotate, onSelect }: { activeTab: TabState; activeTabId?: string | null; devices: VirtualDevice[]; environments: Environment[]; isMuted: boolean; pan: { x: number; y: number }; partition: string; spacePressed: boolean; viewportRef: React.RefObject<HTMLDivElement | null>; workspace: Workspace; zoom: number; onAddClick: () => void; onApplySettings: (id: string, patch: Partial<Omit<VirtualDevice, 'id'>>) => void; onCaptureScreenshot: (id: string, view: BrowserWebviewElement | null) => void; onMove: (id: string, position: { x: number; y: number }) => void; onNavigate: (id: string, url: string) => void; onPan: (pan: { x: number; y: number }) => void; onRemove: (id: string) => void; onResize: (id: string, displayScale: number) => void; onRotate: (id: string) => void; onSelect: (id: string | null) => void }): React.JSX.Element {
   const panDrag = useRef<{ pointerId: number; pointerX: number; pointerY: number; originX: number; originY: number } | null>(null)
 
   function startPan(event: React.PointerEvent<HTMLDivElement>): void {
@@ -932,7 +998,7 @@ function CanvasViewport({ activeTabId, devices, environments, isMuted, pan, part
     startPan(event)
   }} onPointerMove={movePan} onPointerUp={stopPan} onPointerCancel={stopPan} onAuxClick={stopMiddleClick}>
     <div className="devices-canvas-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` } as CSSProperties}>
-      {devices.length === 0 ? <DevicesCanvasEmptyState onAddClick={onAddClick} /> : devices.map((device) => <DeviceFrame key={device.id} device={device} environments={environments} isMuted={isMuted} partition={partition} tabId={activeTabId} zoom={zoom} onApplySettings={onApplySettings} onCaptureScreenshot={onCaptureScreenshot} onMove={onMove} onNavigate={onNavigate} onRemove={onRemove} onResize={onResize} onRotate={onRotate} onSelect={onSelect} />)}
+      {devices.length === 0 ? <DevicesCanvasEmptyState onAddClick={onAddClick} /> : devices.map((device) => <DeviceFrame key={device.id} device={device} environments={environments} isMuted={isMuted} partition={partition} tab={activeTab} tabId={activeTabId} workspace={workspace} zoom={zoom} onApplySettings={onApplySettings} onCaptureScreenshot={onCaptureScreenshot} onMove={onMove} onNavigate={onNavigate} onRemove={onRemove} onResize={onResize} onRotate={onRotate} onSelect={onSelect} />)}
     </div>
   </div>
 }
@@ -1149,7 +1215,7 @@ function DevicesCanvas({ active, currentUrl, tab, workspace, onResponsive }: { a
 
   return <div className={`devices-canvas${active ? '' : ' is-hidden'}`} aria-hidden={!active}>
     <CanvasToolbar addOpen={addOpen} syncNavigation={syncNavigation} zoom={zoom} onAddClick={() => setAddOpen((open) => !open)} onFitToScreen={fitToScreen} onPresetSelect={addPreset} onResponsive={onResponsive} onResetView={resetView} onResetZoom={() => setClampedZoom(1)} onSyncNavigationChange={setSyncNavigation} onZoomIn={() => setClampedZoom(zoom + 0.25)} onZoomOut={() => setClampedZoom(zoom - 0.25)} />
-    <CanvasViewport activeTabId={tab.id} devices={devices} environments={workspace.environments} isMuted={Boolean(tab.isMuted)} pan={pan} partition={workspace.sessionPartition} spacePressed={spacePressed} viewportRef={viewportRef} zoom={zoom} onAddClick={() => setAddOpen(true)} onApplySettings={updateLocalDevice} onCaptureScreenshot={captureDeviceScreenshot} onMove={updateLocalPosition} onNavigate={handleDeviceNavigate} onPan={setPan} onRemove={removeLocalDevice} onResize={resizeDevice} onRotate={rotateDevice} onSelect={selectLocalDevice} />
+    <CanvasViewport activeTab={tab} activeTabId={tab.id} devices={devices} environments={workspace.environments} isMuted={Boolean(tab.isMuted)} pan={pan} partition={workspace.sessionPartition} spacePressed={spacePressed} viewportRef={viewportRef} workspace={workspace} zoom={zoom} onAddClick={() => setAddOpen(true)} onApplySettings={updateLocalDevice} onCaptureScreenshot={captureDeviceScreenshot} onMove={updateLocalPosition} onNavigate={handleDeviceNavigate} onPan={setPan} onRemove={removeLocalDevice} onResize={resizeDevice} onRotate={rotateDevice} onSelect={selectLocalDevice} />
   </div>
 }
 function deviceBounds(devices: VirtualDevice[]): { x: number; y: number; width: number; height: number } {
@@ -1268,7 +1334,7 @@ function BrowserArea({ empty, hasActiveTab, settings, primaryLabel, secondaryEnv
         const activeRecord = workspaceReady && record.workspace.id === activeWorkspaceId
         const recordHidden = !activeRecord || devicesCanvas || Boolean(internalPage) || empty
         return <div key={record.workspace.id} className={`browser-webviews${activeRecord && secondaryUrl && !devicesCanvas ? ' is-split' : ''}${activeRecord && constrainedViewport ? ' is-constrained' : ''}${recordHidden ? ' is-hidden' : ''}`} style={activeRecord ? viewportStyle : undefined} aria-hidden={recordHidden}>
-          {orderedTabs(record.workspace.id, record.tabs).filter((tab) => tab.kind !== 'device').map((tab) => <BrowserWebview key={`${record.workspace.id}:${tab.id}`} workspaceId={record.workspace.id} tabId={tab.id} url={tab.url} active={activeRecord && !devicesCanvas && !internalPage && !empty && tab.id === record.activeTabId} partition={record.workspace.sessionPartition} register={registerWebview} />)}
+          {orderedTabs(record.workspace.id, record.tabs).filter((tab) => tab.kind !== 'device').map((tab) => <BrowserWebview key={`${record.workspace.id}:${tab.id}`} workspace={record.workspace} workspaceId={record.workspace.id} tab={tab} tabId={tab.id} url={tab.url} active={activeRecord && !devicesCanvas && !internalPage && !empty && tab.id === record.activeTabId} partition={record.workspace.sessionPartition} register={registerWebview} />)}
           {activeRecord && secondaryUrl && !devicesCanvas && !internalPage && !empty && <webview className="browser-webview browser-webview-secondary is-active" src={secondaryUrl} partition={record.workspace.sessionPartition} webpreferences="contextIsolation=yes,sandbox=yes" />}
         </div>
       })}

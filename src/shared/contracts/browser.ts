@@ -36,6 +36,7 @@ export const navigationStateSchema = z.strictObject({
 export type NavigationState = z.infer<typeof navigationStateSchema>
 
 export const tabIdSchema = z.string().min(1).max(100)
+export const workspaceIdSchema = z.uuid()
 export const tabKindSchema = z.enum(['normal', 'device'])
 export type TabKind = z.infer<typeof tabKindSchema>
 export const tabStateSchema = navigationStateSchema.extend({
@@ -66,9 +67,10 @@ export type TabState = z.infer<typeof tabStateSchema>
 export type TabStateUpdate = z.infer<typeof tabStateUpdateSchema>
 export type TabsSnapshot = z.infer<typeof tabsSnapshotSchema>
 export const tabOrderSchema = z.array(tabIdSchema).min(1).max(100)
+export const persistedBrowserUrlSchema = z.string().max(65_536)
 export const persistedTabSchema = z.strictObject({
   id: tabIdSchema,
-  url: z.string().max(2048),
+  url: persistedBrowserUrlSchema,
   kind: tabKindSchema.default('normal'),
   active: z.boolean()
 })
@@ -77,6 +79,7 @@ export type PersistedTab = z.infer<typeof persistedTabSchema>
 export const deviceViewIdSchema = z.string().min(1).max(100)
 export const deviceDevToolsTargetSchema = z.strictObject({ tabId: tabIdSchema.nullable(), deviceId: deviceViewIdSchema.nullable() })
 export const tabWebContentsTargetSchema = z.strictObject({
+  workspaceId: workspaceIdSchema.optional(),
   tabId: tabIdSchema,
   webContentsId: z.number().int().positive().nullable()
 })
@@ -254,6 +257,56 @@ export type DownloadEntry = z.infer<typeof downloadEntrySchema>
 export const screenshotResultSchema = z.enum(['saved', 'cancelled'])
 export type ScreenshotResult = z.infer<typeof screenshotResultSchema>
 
+export const audioCenterSourceKindSchema = z.enum(['tab', 'device'])
+export type AudioCenterSourceKind = z.infer<typeof audioCenterSourceKindSchema>
+export const audioCenterTargetSchema = z.strictObject({
+  kind: audioCenterSourceKindSchema,
+  workspaceId: workspaceIdSchema,
+  tabId: tabIdSchema,
+  deviceId: deviceViewIdSchema.nullable().default(null),
+  webContentsId: z.number().int().positive().nullable(),
+  workspaceName: z.string().trim().min(1).max(60),
+  tabTitle: z.string().trim().min(1).max(300),
+  deviceName: z.string().trim().min(1).max(80).nullable().default(null),
+  url: z.string().max(2048),
+  favicon: z.string().max(2048).optional(),
+  muted: z.boolean()
+})
+export type AudioCenterTarget = z.infer<typeof audioCenterTargetSchema>
+export const audioCenterSessionIdSchema = z.string().min(1).max(300)
+export const audioCenterCommandSchema = z.strictObject({
+  sessionId: audioCenterSessionIdSchema,
+  action: z.enum(['play', 'pause', 'mute', 'unmute', 'seek-forward', 'seek-backward', 'seek']),
+  position: z.number().nonnegative().optional()
+})
+export type AudioCenterCommand = z.infer<typeof audioCenterCommandSchema>
+export const audioCenterSessionSchema = z.strictObject({
+  id: audioCenterSessionIdSchema,
+  kind: audioCenterSourceKindSchema,
+  workspaceId: workspaceIdSchema,
+  workspaceName: z.string(),
+  tabId: tabIdSchema,
+  tabTitle: z.string(),
+  deviceId: deviceViewIdSchema.nullable(),
+  deviceName: z.string().nullable(),
+  url: z.string(),
+  domain: z.string(),
+  favicon: z.string().optional(),
+  title: z.string(),
+  artist: z.string().nullable(),
+  artwork: z.string().nullable(),
+  state: z.enum(['playing', 'paused', 'muted']),
+  muted: z.boolean(),
+  currentTime: z.number().nonnegative().nullable(),
+  duration: z.number().nonnegative().nullable(),
+  live: z.boolean(),
+  supportsPlayPause: z.boolean(),
+  supportsSeek: z.boolean(),
+  playerCount: z.number().int().nonnegative(),
+  pageScoped: z.boolean()
+})
+export type AudioCenterSession = z.infer<typeof audioCenterSessionSchema>
+
 export const protectedContentDiagnosticsSchema = z.strictObject({
   runtime: z.strictObject({
     electron: z.string(),
@@ -307,7 +360,6 @@ export const protectedContentDiagnosticsSchema = z.strictObject({
 })
 export type ProtectedContentDiagnostics = z.infer<typeof protectedContentDiagnosticsSchema>
 
-export const workspaceIdSchema = z.uuid()
 export const environmentIdSchema = z.uuid()
 export const workspaceNameSchema = z.string().trim().min(1).max(60)
 export const browserThemeColorsSchema = z.strictObject({
@@ -462,6 +514,11 @@ export const browserChannels = {
   updateTabState: 'browser:tabs:update-state',
   setTabWebContentsTarget: 'browser:tabs:set-webcontents-target',
   setTabAudioMuted: 'browser:tabs:set-audio-muted',
+  registerAudioTarget: 'browser:audio:register-target',
+  getAudioSessions: 'browser:audio:get-sessions',
+  audioSessionsChanged: 'browser:audio:sessions-changed',
+  audioCommand: 'browser:audio:command',
+  goToAudioSource: 'browser:audio:go-to-source',
   getHistory: 'browser:history:get',
   recordHistory: 'browser:history:record',
   removeHistoryEntry: 'browser:history:remove-entry',
@@ -651,6 +708,13 @@ export type DevBrowserApi = {
   downloads: {
     getAll: () => Promise<DownloadEntry[]>
     onChange: (listener: (entries: DownloadEntry[]) => void) => () => void
+  }
+  audio: {
+    registerTarget: (target: AudioCenterTarget) => Promise<void>
+    getSessions: () => Promise<AudioCenterSession[]>
+    command: (command: AudioCenterCommand) => Promise<void>
+    goToSource: (sessionId: string) => Promise<AudioCenterSession | null>
+    onSessionsChanged: (listener: (sessions: AudioCenterSession[]) => void) => () => void
   }
   screenshots: { capture: () => Promise<ScreenshotResult> }
   drm: { getDiagnostics: () => Promise<ProtectedContentDiagnostics> }

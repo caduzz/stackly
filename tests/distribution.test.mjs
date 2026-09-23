@@ -242,6 +242,8 @@ test('persisted browser tabs are scoped by workspace', () => {
   assert.match(database, /REFERENCES workspaces\(id\) ON DELETE CASCADE/)
   assert.match(tabManager, /crypto\.randomUUID\(\)/)
   assert.match(browserContracts, /reorderTabs: 'browser:tabs:reorder'/)
+  assert.match(browserContracts, /persistedBrowserUrlSchema = z\.string\(\)\.max\(65_536\)/)
+  assert.match(browserContracts, /url: persistedBrowserUrlSchema/)
   assert.match(browserIpc, /reorder\(tabOrderSchema\.parse\(ids\)\)/)
   assert.match(tabManager, /reorder\(ids: string\[\]\)/)
   assert.doesNotMatch(tabManager, /initialTabId/)

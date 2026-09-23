@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, shell, webContents, type IpcMainInvokeEvent } from 'electron'
-import { apiRequestIdSchema, apiSendRequestSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, elementNodeIdSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, navigateSchema, navigationHistoryVisitSchema, splitViewSchema, storageMutationSchema, tabIdSchema, tabOrderSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema } from '../../shared/contracts/browser'
+import { apiRequestIdSchema, apiSendRequestSchema, audioCenterCommandSchema, audioCenterSessionIdSchema, audioCenterTargetSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, elementNodeIdSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, navigateSchema, navigationHistoryVisitSchema, splitViewSchema, storageMutationSchema, tabIdSchema, tabOrderSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema } from '../../shared/contracts/browser'
 import { sendApiRequest } from '../api/sendApiRequest'
 import { generateThemeFromImage } from '../browser/imageTheme'
 import type { WorkspaceManager } from '../workspaces/WorkspaceManager'
@@ -133,12 +133,18 @@ export function registerBrowserIpc(allowedSenderIds: Set<number>, workspaceManag
   })
   ipcMain.handle(browserChannels.setTabWebContentsTarget, (event, raw: unknown) => {
     const target = tabWebContentsTargetSchema.parse(raw)
-    getManager(event).setWebContentsTarget(target.tabId, target.webContentsId)
+    getWorkspaces(event).setTabWebContentsTarget(target)
   })
   ipcMain.handle(browserChannels.setTabAudioMuted, (event, id: unknown, muted: unknown) => {
     if (typeof muted !== 'boolean') throw new Error('Invalid muted state')
     getWorkspaces(event).setTabAudioMuted(tabIdSchema.parse(id), muted)
   })
+  ipcMain.handle(browserChannels.registerAudioTarget, (event, raw: unknown) => {
+    getWorkspaces(event).registerAudioTarget(audioCenterTargetSchema.parse(raw))
+  })
+  ipcMain.handle(browserChannels.getAudioSessions, (event) => getWorkspaces(event).audioSessions())
+  ipcMain.handle(browserChannels.audioCommand, (event, raw: unknown) => getWorkspaces(event).audioCommand(audioCenterCommandSchema.parse(raw)))
+  ipcMain.handle(browserChannels.goToAudioSource, (event, raw: unknown) => getWorkspaces(event).goToAudioSource(audioCenterSessionIdSchema.parse(raw)))
   ipcMain.handle(browserChannels.getHistory, (event, query: unknown) => {
     return getWorkspaces(event).getHistory(typeof query === 'string' ? query : '')
   })

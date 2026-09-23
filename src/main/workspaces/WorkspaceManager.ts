@@ -1,5 +1,5 @@
-import { session, type BrowserWindow, type Session } from 'electron'
-import { browserChannels, environmentConfigSchema, navigationHistoryVisitSchema, workspaceNameSchema, type BrowserBounds, type BrowserSettings, type ConsoleEntry, type CookieIdentity, type DevicesCanvasLayout, type ElementsSnapshot, type Environment, type EnvironmentConfig, type NavigationHistoryEntry, type NavigationHistoryVisit, type NavigationState, type NetworkEntry, type StorageMutation, type StorageSnapshot, type TabsSnapshot, type TabState, type ViewportPreset, type Workspace, type WorkspacesSnapshot } from '../../shared/contracts/browser'
+import { session, webContents, type BrowserWindow, type Session } from 'electron'
+import { audioCenterTargetSchema, browserChannels, environmentConfigSchema, navigationHistoryVisitSchema, workspaceNameSchema, type AudioCenterCommand, type AudioCenterSession, type AudioCenterTarget, type BrowserBounds, type BrowserSettings, type ConsoleEntry, type CookieIdentity, type DevicesCanvasLayout, type ElementsSnapshot, type Environment, type EnvironmentConfig, type NavigationHistoryEntry, type NavigationHistoryVisit, type NavigationState, type NetworkEntry, type StorageMutation, type StorageSnapshot, type TabWebContentsTarget, type TabsSnapshot, type TabState, type ViewportPreset, type Workspace, type WorkspacesSnapshot } from '../../shared/contracts/browser'
 import { TabManager } from '../tabs/TabManager'
 import { SettingsRepository } from '../storage/SettingsRepository'
 import { WorkspaceRepository } from '../storage/WorkspaceRepository'
@@ -9,6 +9,7 @@ import { configureSessionPermissions } from '../security/sessionPermissions'
 import { chromeLikeUserAgent } from '../browser/userAgent'
 import { DeviceViewManager } from '../devices/DeviceViewManager'
 import type { DownloadEntry } from '../../shared/contracts/browser'
+import { AudioCenter } from '../media/AudioCenter'
 
 type ManagedWorkspace = { data: Workspace; tabs: TabManager; deviceViews: DeviceViewManager; downloads: DownloadTracker; browserSession: Session; disposePermissions: () => void }
 type ClosedTabRecord = { workspaceId: string; url: string; title: string; isMuted: boolean; kind: TabState['kind'] }
@@ -44,12 +45,14 @@ export class WorkspaceManager {
   private tooltipOpen = false
   private readonly closedTabs: ClosedTabRecord[] = []
   private readonly historyKeys = new Map<string, string>()
+  private readonly audioCenter: AudioCenter
 
   constructor(
     private readonly window: BrowserWindow,
     private readonly repository: WorkspaceRepository,
     private readonly settings: SettingsRepository
   ) {
+    this.audioCenter = new AudioCenter(window, (workspaceId, tabId, muted) => this.setWorkspaceTabAudioMuted(workspaceId, tabId, muted), (workspaceId, tabId, deviceId) => this.selectAudioSource(workspaceId, tabId, deviceId))
     const saved = repository.list()
     if (saved.length === 0) {
       this.add('Frontend', [
@@ -229,9 +232,48 @@ export class WorkspaceManager {
   }
 
   setTabAudioMuted(tabId: string, muted: boolean): void {
-    const workspace = this.activeWorkspace()
+    this.setWorkspaceTabAudioMuted(this.activeWorkspaceId, tabId, muted)
+  }
+
+  setWorkspaceTabAudioMuted(workspaceId: string, tabId: string, muted: boolean): void {
+    const workspace = this.workspaces.get(workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
     workspace.tabs.setAudioMuted(tabId, muted)
     workspace.deviceViews.setAudioMutedForTab(tabId, muted)
+    this.audioCenter.updateMuted(workspaceId, tabId, muted)
+  }
+
+  setTabWebContentsTarget(target: TabWebContentsTarget): void {
+    const workspace = target.workspaceId ? this.workspaces.get(target.workspaceId) : this.activeWorkspace()
+    if (!workspace) throw new Error('Workspace not found')
+    workspace.tabs.setWebContentsTarget(target.tabId, target.webContentsId)
+  }
+
+  registerAudioTarget(raw: AudioCenterTarget): void {
+    const target = audioCenterTargetSchema.parse(raw)
+    const workspace = this.workspaces.get(target.workspaceId)
+    if (!workspace) throw new Error('Workspace not found')
+    const contents = target.webContentsId ? webContents.fromId(target.webContentsId) ?? null : null
+    if (contents && contents.session !== workspace.browserSession) throw new Error('Audio target belongs to another workspace session')
+    this.audioCenter.register(target, contents)
+  }
+
+  audioSessions(): AudioCenterSession[] {
+    return this.audioCenter.snapshot()
+  }
+
+  audioCommand(command: AudioCenterCommand): Promise<void> {
+    return this.audioCenter.command(command)
+  }
+
+  goToAudioSource(sessionId: string): AudioCenterSession | null {
+    return this.audioCenter.goToSource(sessionId)
+  }
+
+  private selectAudioSource(workspaceId: string, tabId: string, _deviceId: string | null): void {
+    if (workspaceId !== this.activeWorkspaceId) this.select(workspaceId)
+    const workspace = this.activeWorkspace()
+    workspace.tabs.select(tabId)
   }
 
   reopenClosedTab(): string | null {
@@ -427,6 +469,7 @@ export class WorkspaceManager {
   }
 
   dispose(): void {
+    this.audioCenter.dispose()
     for (const workspace of this.workspaces.values()) {
       workspace.downloads.dispose()
       workspace.deviceViews.dispose()
