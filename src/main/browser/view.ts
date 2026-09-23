@@ -1,13 +1,14 @@
 import { app, WebContentsView, type BrowserWindow, type Session } from 'electron'
 import type { NavigationState } from '../../shared/contracts/browser'
 import { registerPaletteShortcut } from './paletteShortcut'
+import { chromeLikeUserAgent } from './userAgent'
 
 export type BrowserViewHandle = {
   view: WebContentsView
   disposeListeners: () => void
 }
 
-export function createBrowserView(window: BrowserWindow, session: Session, onStateChange: (state: NavigationState) => void, isPaletteOpen: () => boolean, onOpenUrl: (url: string) => void): BrowserViewHandle {
+export function createBrowserView(window: BrowserWindow, session: Session, onStateChange: (state: NavigationState) => void, isPaletteOpen: () => boolean, onOpenUrl: (url: string, active: boolean) => void): BrowserViewHandle {
   const view = new WebContentsView({
     webPreferences: {
       session,
@@ -25,10 +26,11 @@ export function createBrowserView(window: BrowserWindow, session: Session, onSta
 
   view.setBounds({ x: 0, y: 0, width: 1, height: 1 })
   view.setVisible(false)
-  view.webContents.setWindowOpenHandler(({ url }) => {
+  view.webContents.setUserAgent(chromeLikeUserAgent())
+  view.webContents.setWindowOpenHandler(({ url, disposition }) => {
     try {
       const destination = new URL(url)
-      if (destination.protocol === 'http:' || destination.protocol === 'https:') queueMicrotask(() => onOpenUrl(destination.href))
+      if (destination.protocol === 'http:' || destination.protocol === 'https:') queueMicrotask(() => onOpenUrl(destination.href, disposition !== 'background-tab'))
     } catch { /* Invalid and unsupported destinations remain blocked. */ }
     return { action: 'deny' }
   })
@@ -44,6 +46,9 @@ export function createBrowserView(window: BrowserWindow, session: Session, onSta
   const sendState = (): void => onStateChange(getNavigationState(view))
   view.webContents.on('did-start-loading', sendState)
   view.webContents.on('did-stop-loading', sendState)
+  view.webContents.on('did-fail-load', sendState)
+  view.webContents.on('did-fail-provisional-load', sendState)
+  view.webContents.on('did-finish-load', sendState)
   view.webContents.on('did-navigate', sendState)
   view.webContents.on('did-navigate-in-page', (_event, _url, isMainFrame) => {
     if (isMainFrame) sendState()
@@ -54,7 +59,7 @@ export function createBrowserView(window: BrowserWindow, session: Session, onSta
   return {
     view,
     disposeListeners: () => {
-      for (const event of ['before-input-event', 'will-navigate', 'did-start-loading', 'did-stop-loading', 'did-navigate', 'did-navigate-in-page', 'page-title-updated']) {
+      for (const event of ['before-input-event', 'will-navigate', 'did-start-loading', 'did-stop-loading', 'did-fail-load', 'did-fail-provisional-load', 'did-finish-load', 'did-navigate', 'did-navigate-in-page', 'page-title-updated']) {
         view.webContents.removeAllListeners(event)
       }
     }

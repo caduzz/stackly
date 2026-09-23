@@ -19,6 +19,9 @@ armazenamento, cliente de API e terminal em uma única interface.
 - API Client com Monaco Editor e visualização JSON
 - Terminal integrado com `xterm.js` e `node-pty`
 - Detector restrito de serviços localhost conhecidos
+- Source Control local com repositório, branch, status, stage, commit, diff e histórico
+- Base do provider GitHub com contrato, IPC e estado de conexão preparado
+- Login GitHub via Device Flow com credencial persistida por armazenamento seguro do sistema
 - Downloads, screenshots, presets de viewport e Command Palette
 - Persistência SQLite de workspaces, environments e settings
 
@@ -28,7 +31,9 @@ armazenamento, cliente de API e terminal em uma única interface.
 - electron-vite, React 19 e TypeScript strict
 - Tailwind CSS, Zustand, Zod e Lucide
 - Monaco Editor e xterm.js
-- SQLite com better-sqlite3
+- `simple-git` para operações Git locais
+- Octokit para integração futura com GitHub
+- SQLite nativo via `node:sqlite`
 - electron-builder para distribuição
 
 ## Arquitetura
@@ -45,14 +50,22 @@ Sites remotos são carregados exclusivamente em `WebContentsView`. O renderer
 local não recebe acesso direto ao Node.js, `ipcRenderer`, filesystem, shell ou
 processos filhos.
 
+O Source Control também segue essa divisão: operações Git locais e futuras
+chamadas GitHub rodam no processo principal, enquanto a interface React consome
+apenas APIs tipadas e validadas pelo preload.
+
 ## Requisitos
 
-- Node.js 22.12 ou superior
+- Node.js 24 ou superior
 - npm
 - Linux, macOS ou Windows
 
-Os pacotes `better-sqlite3` e `node-pty` usam binários nativos prebuilt. O
-`postinstall` verifica se há binários para o sistema e arquitetura atuais.
+O pacote `node-pty` usa binários nativos prebuilt. O `postinstall` verifica se
+há binário para o sistema e arquitetura atuais.
+
+Se o `npm install` reclamar de ferramenta nativa no Windows, o problema
+esperado passa a ser apenas o terminal integrado (`node-pty`); instale Python 3
+e Visual Studio Build Tools com o workload "Desktop development with C++".
 
 ## Desenvolvimento
 
@@ -101,6 +114,8 @@ Chromium persistente própria no formato `persist:workspace:<id>`.
 - permissões sensíveis negadas por padrão
 - criação arbitrária de janelas bloqueada
 - argumentos IPC validados
+- operações Git e GitHub isoladas no processo principal
+- token GitHub criptografado com `safeStorage`, fora do SQLite e fora do renderer
 - DevTools desabilitado no build empacotado
 - CSP restritiva na shell local
 
@@ -128,8 +143,11 @@ de código; macOS também deve usar notarização.
 1. Criar CI em matriz para Linux, Windows e macOS.
 2. Adicionar assinatura, notarização e publicação de releases.
 3. Implementar atualização automática com canal estável.
-4. Adicionar testes E2E dos fluxos de navegação, workspaces e DevTools.
-5. Otimizar carregamento do Monaco e o tamanho dos instaladores.
+4. Implementar login GitHub por Device Flow e armazenamento seguro de credenciais.
+5. Identificar remotes GitHub e exibir metadados do repositório remoto.
+6. Adicionar fetch, pull, push, pull requests, issues e GitHub Actions.
+7. Adicionar testes E2E dos fluxos de navegação, workspaces, DevTools e Source Control.
+8. Otimizar carregamento do Monaco e o tamanho dos instaladores.
 
 ## Licença
 

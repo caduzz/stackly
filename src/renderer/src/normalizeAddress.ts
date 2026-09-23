@@ -4,5 +4,5 @@ export function normalizeAddress(input: string): string {
   if (/^https?:\/\//i.test(value)) return value
   if (/^(localhost|127\.0\.0\.1)(:\d+)?(?:\/|$)/i.test(value)) return `http://${value}`
   if (/^[\w.-]+\.[a-z]{2,}(?::\d+)?(?:\/|$)/i.test(value)) return `https://${value}`
-  return value
+  return `https://www.google.com/search?q=${encodeURIComponent(value)}`
 }

@@ -1,7 +1,7 @@
 import { MonitorSmartphone } from 'lucide-react'
 import type { ViewportPreset } from '../../../shared/contracts/browser'
 
-const options: Array<{ value: ViewportPreset; label: string }> = [
+const options: Array<{ value: Exclude<ViewportPreset, 'devices-canvas'>; label: string }> = [
   { value: 'responsive', label: 'Responsive' },
   { value: 'mobile', label: 'Mobile' },
   { value: 'tablet', label: 'Tablet' },

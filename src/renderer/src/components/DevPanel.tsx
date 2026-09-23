@@ -6,10 +6,14 @@ import { ConsoleInspector } from '../features/console/ConsoleInspector'
 import { StorageInspector } from '../features/storage/StorageInspector'
 import { ApiClient } from '../features/api/ApiClient'
 import { TerminalPanel } from '../features/terminal/TerminalPanel'
+import { ErrorCenter } from '../features/errors/ErrorCenter'
+import { ElementsInspector } from '../features/elements/ElementsInspector'
 
-export type DevPanelKind = 'network' | 'console' | 'storage' | 'api' | 'terminal'
+export type DevPanelKind = 'elements' | 'errors' | 'network' | 'console' | 'storage' | 'api' | 'terminal'
 
 const panels: { id: DevPanelKind; label: string }[] = [
+  { id: 'elements', label: 'Elements' },
+  { id: 'errors', label: 'Errors' },
   { id: 'network', label: 'Network' },
   { id: 'console', label: 'Console' },
   { id: 'storage', label: 'Storage' },
@@ -24,15 +28,18 @@ type Props = {
   onPanelChange: (panel: DevPanelKind) => void
   onClose: () => void
   networkKey: string
+  targetAvailable: boolean
+  targetLabel: string
+  targetReady: boolean
 }
 
 function heightLimits(): { min: number; max: number } {
   return { min: 130, max: Math.max(130, window.innerHeight - 250) }
 }
 
-export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, onClose, networkKey }: Props): React.JSX.Element {
+export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, onClose, networkKey, targetAvailable, targetLabel, targetReady }: Props): React.JSX.Element {
   const drag = useRef<{ y: number; height: number } | null>(null)
-  const tabRefs = useRef<Record<DevPanelKind, HTMLButtonElement | null>>({ network: null, console: null, storage: null, api: null, terminal: null })
+  const tabRefs = useRef<Record<DevPanelKind, HTMLButtonElement | null>>({ elements: null, errors: null, network: null, console: null, storage: null, api: null, terminal: null })
   const limits = heightLimits()
 
   useEffect(() => () => {
@@ -61,6 +68,8 @@ export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, o
     onPanelChange(panels[next].id)
     tabRefs.current[panels[next].id]?.focus()
   }
+
+  const needsChromiumTarget = activePanel === 'elements' || activePanel === 'errors' || activePanel === 'network' || activePanel === 'console' || activePanel === 'storage'
 
   return <section className="shell-dev-panel" style={{ height: Math.min(height, limits.max) }} aria-label="Development panel">
     <div
@@ -106,10 +115,15 @@ export function DevPanel({ height, onHeightChange, activePanel, onPanelChange, o
           onKeyDown={(event) => onTabKeyDown(event, index)}
         >{panel.label}</button>)}
       </div>
+      <span className="dev-panel-target" title={targetLabel}>Target: {targetLabel}</span>
       <IconButton icon={X} aria-label="Close Dev Panel" title="Close Dev Panel" onClick={onClose} />
     </div>
     <div className="shell-panel-body shell-panel-body--network" id="dev-panel-content" role="tabpanel" aria-labelledby={`dev-tab-${activePanel}`} tabIndex={0}>
-      {activePanel === 'network' ? <NetworkInspector key={networkKey} /> : activePanel === 'console' ? <ConsoleInspector key={networkKey} /> : activePanel === 'storage' ? <StorageInspector key={networkKey} /> : activePanel === 'api' ? <ApiClient /> : <TerminalPanel />}
+      {needsChromiumTarget && !targetAvailable
+        ? <div className="dev-panel-empty-target">Select a Chromium target to inspect.</div>
+        : needsChromiumTarget && !targetReady
+          ? <div className="dev-panel-empty-target">Binding Dev Panel target...</div>
+          : activePanel === 'elements' ? <ElementsInspector key={networkKey} /> : activePanel === 'errors' ? <ErrorCenter key={networkKey} targetLabel={targetLabel} onOpenPanel={onPanelChange} /> : activePanel === 'network' ? <NetworkInspector key={networkKey} /> : activePanel === 'console' ? <ConsoleInspector key={networkKey} /> : activePanel === 'storage' ? <StorageInspector key={networkKey} /> : activePanel === 'api' ? <ApiClient /> : <TerminalPanel />}
     </div>
   </section>
 }

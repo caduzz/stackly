@@ -1,318 +1,274 @@
-import type { BrowserWindow, Session, WebContentsView } from 'electron'
-import { browserChannels, viewportPresetSizes, type BrowserBounds, type BrowserPreview, type TabsSnapshot, type ViewportPreset } from '../../shared/contracts/browser'
-import { initialTabId } from '../../shared/types/tab'
-import { createBrowserView, getNavigationState, type BrowserViewHandle } from '../browser/view'
-import { NetworkCollector } from '../devtools/NetworkCollector'
+import { webContents, type BrowserWindow, type Session, type WebContents } from 'electron'
+import { browserChannels, type BrowserBounds, type BrowserPreview, type ConsoleEntry, type CookieIdentity, type ElementsSnapshot, type NetworkEntry, type PersistedTab, type StorageMutation, type StorageSnapshot, type TabKind, type TabState, type TabStateUpdate, type TabsSnapshot, type ViewportPreset } from '../../shared/contracts/browser'
 import { ConsoleCollector } from '../devtools/ConsoleCollector'
+import { NetworkCollector } from '../devtools/NetworkCollector'
+import { PageElements } from '../devtools/PageElements'
 import { PageStorage } from '../storage/PageStorage'
-import type { ConsoleEntry, CookieIdentity, NetworkEntry, StorageSnapshot } from '../../shared/contracts/browser'
-
-const START_URL = 'https://example.com/'
 
 function initialUrl(): string {
   const override = process.env.ELECTRON_RENDERER_URL && process.env.DEV_BROWSER_START_URL
-  if (!override) return START_URL
+  if (!override) return ''
   const url = new URL(override)
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid development start URL')
   return url.href
 }
 
-type ManagedTab = { id: string; handle: BrowserViewHandle; secondary?: BrowserViewHandle; network: NetworkCollector; console: ConsoleCollector; storage: PageStorage }
+function createTabState(id: string, url = '', muted = false, kind: TabKind = 'normal'): TabState {
+  return {
+    id,
+    kind,
+    url,
+    title: url ? new URL(url).hostname : kind === 'device' ? 'Device Tab' : 'New Tab',
+    isLoading: false,
+    canGoBack: false,
+    canGoForward: false,
+    isMuted: muted,
+    isAudible: false
+  }
+}
 
 export class TabManager {
-  private readonly tabs = new Map<string, ManagedTab>()
-  private activeTabId: string | null = initialTabId
-  private bounds: BrowserBounds | null = null
-  private workspaceVisible = false
-  private paletteOpen = false
-  private panelResizing = false
-  private viewportPreset: ViewportPreset = 'responsive'
-  private networkUpdateTimer: ReturnType<typeof setTimeout> | null = null
-  private consoleUpdateTimer: ReturnType<typeof setTimeout> | null = null
-  private splitBaseUrl: string | null = null
-  private syncSplitPath = false
-  private syncingSplit = false
-  private pendingSplitUrl: string | null = null
+  private readonly tabs = new Map<string, TabState>()
+  private readonly targets = new Map<string, TabDevToolsTarget>()
+  private activeTabId: string | null = null
 
-  constructor(private readonly window: BrowserWindow, private readonly session: Session, loadInitialPage: boolean) {
-    this.add(initialTabId, loadInitialPage ? initialUrl() : undefined)
-  }
-
-  private add(id: string, url?: string): void {
-    const handle = createBrowserView(this.window, this.session, (state) => {
-      if (!this.tabs.has(id)) return
-      if (this.workspaceVisible && id === this.activeTabId && !this.window.webContents.isDestroyed()) {
-        this.window.webContents.send(browserChannels.navigationStateChanged, state)
-      }
-      if (id === this.activeTabId) void this.syncSecondaryPath(state.url)
-      this.emitSnapshot()
-    }, () => this.paletteOpen, (destination) => this.open(destination))
-    const ready = handle.view.webContents.loadURL(url ?? 'about:blank').catch((error: unknown) => {
-      console.error('Failed to load page', error)
-    })
-    const network = new NetworkCollector(handle.view.webContents, url ? Promise.resolve() : ready, () => this.scheduleNetworkUpdate(id))
-    const consoleCollector = new ConsoleCollector(handle.view.webContents, () => network.start(), () => this.scheduleConsoleUpdate(id))
-    this.tabs.set(id, { id, handle, network, console: consoleCollector, storage: new PageStorage(handle.view.webContents, () => network.start()) })
-  }
-
-  private splitDestination(primaryUrl: string): string {
-    const base = new URL(this.splitBaseUrl!)
-    try {
-      const primary = new URL(primaryUrl)
-      base.pathname = primary.pathname
-      base.search = primary.search
-      base.hash = primary.hash
-    } catch { /* A blank primary tab opens the environment root. */ }
-    return base.href
-  }
-
-  private async ensureSecondary(tab: ManagedTab): Promise<void> {
-    if (!this.splitBaseUrl || tab.secondary) return
-    const secondary = createBrowserView(this.window, this.session, () => {}, () => this.paletteOpen, (destination) => this.open(destination))
-    tab.secondary = secondary
-    await secondary.view.webContents.loadURL(this.splitDestination(tab.handle.view.webContents.getURL())).catch((error: unknown) => {
-      console.error('Failed to load split page', error)
-    })
-  }
-
-  private async syncSecondaryPath(primaryUrl: string): Promise<void> {
-    if (!this.syncSplitPath || !this.splitBaseUrl) return
-    if (this.syncingSplit) {
-      this.pendingSplitUrl = primaryUrl
-      return
-    }
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (!tab?.secondary || !primaryUrl) return
-    const destination = this.splitDestination(primaryUrl)
-    if (tab.secondary.view.webContents.getURL() === destination) return
-    this.syncingSplit = true
-    try { await tab.secondary.view.webContents.loadURL(destination) }
-    catch (error) { console.error('Failed to synchronize split path', error) }
-    finally {
-      this.syncingSplit = false
-      const pending = this.pendingSplitUrl
-      this.pendingSplitUrl = null
-      if (pending && pending !== primaryUrl) void this.syncSecondaryPath(pending)
-    }
-  }
-
-  async setSplitView(baseUrl: string | null, syncPath: boolean): Promise<void> {
-    if (baseUrl !== this.splitBaseUrl) for (const tab of this.tabs.values()) this.destroySecondary(tab)
-    this.splitBaseUrl = baseUrl
-    this.syncSplitPath = syncPath
-    const activeTab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (baseUrl && activeTab) await this.ensureSecondary(activeTab)
-    else for (const tab of this.tabs.values()) this.destroySecondary(tab)
-    this.layoutActiveViews()
-  }
-
-  private scheduleNetworkUpdate(id: string): void {
-    if (!this.workspaceVisible || id !== this.activeTabId || this.networkUpdateTimer) return
-    this.networkUpdateTimer = setTimeout(() => {
-      this.networkUpdateTimer = null
-      if (this.workspaceVisible && id === this.activeTabId && !this.window.webContents.isDestroyed()) {
-        this.window.webContents.send(browserChannels.networkChanged)
-      }
-    }, 80)
-  }
-
-  private scheduleConsoleUpdate(id: string): void {
-    if (!this.workspaceVisible || id !== this.activeTabId || this.consoleUpdateTimer) return
-    this.consoleUpdateTimer = setTimeout(() => {
-      this.consoleUpdateTimer = null
-      if (this.workspaceVisible && id === this.activeTabId && !this.window.webContents.isDestroyed()) {
-        this.window.webContents.send(browserChannels.consoleChanged)
-      }
-    }, 80)
+  constructor(private readonly window: BrowserWindow, private readonly browserSession: Session, _loadInitialPage: boolean, restoredTabs: PersistedTab[] = [], private readonly onTabsChanged: (snapshot: TabsSnapshot) => void = () => {}, private readonly onTabClosed: (tab: TabState) => void = () => {}, private readonly preserveNetworkLog: () => boolean = () => false, private readonly preserveConsoleLog: () => boolean = () => true) {
+    const tabs: PersistedTab[] = restoredTabs.length > 0 ? restoredTabs : [{ id: crypto.randomUUID(), url: initialUrl(), kind: 'normal', active: true }]
+    for (const tab of tabs) this.tabs.set(tab.id, createTabState(tab.id, tab.url || '', false, tab.kind))
+    this.activeTabId = tabs.find((tab) => tab.active)?.id ?? tabs[0]?.id ?? null
   }
 
   private emitSnapshot(): void {
-    if (this.workspaceVisible && !this.window.webContents.isDestroyed()) {
-      this.window.webContents.send(browserChannels.tabsStateChanged, this.snapshot())
-    }
+    const snapshot = this.snapshot()
+    this.onTabsChanged(snapshot)
+    if (!this.window.webContents.isDestroyed()) this.window.webContents.send(browserChannels.tabsStateChanged, snapshot)
   }
 
   snapshot(): TabsSnapshot {
-    return {
-      tabs: [...this.tabs.values()].map(({ id, handle }) => ({
-        id,
-        ...getNavigationState(handle.view)
-      })),
-      activeTabId: this.activeTabId
-    }
+    return { tabs: [...this.tabs.values()], activeTabId: this.activeTabId }
   }
 
-  getActiveView(): WebContentsView {
-    const view = this.activeTabId ? this.tabs.get(this.activeTabId)?.handle.view : undefined
-    if (!view) throw new Error('Active tab is unavailable')
-    return view
-  }
-
-  ensureActiveView(): WebContentsView {
-    if (!this.activeTabId) this.create()
-    return this.getActiveView()
-  }
-
-  private activeTab(): ManagedTab {
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (!tab) throw new Error('Active tab is unavailable')
-    return tab
-  }
-
-  startNetworkCapture(): Promise<void> {
-    return this.activeTab().network.start()
-  }
-
-  networkEntries(): NetworkEntry[] {
-    return this.activeTab().network.snapshot()
-  }
-
-  startConsoleCapture(): Promise<void> { return this.activeTab().console.start() }
-  consoleEntries(): ConsoleEntry[] { return this.activeTab().console.snapshot() }
-  clearConsoleEntries(): void { this.activeTab().console.clear() }
-  storageSnapshot(): Promise<StorageSnapshot> { return this.activeTab().storage.snapshot() }
-  removeCookie(identity: CookieIdentity): Promise<void> { return this.activeTab().storage.removeCookie(identity) }
-
-  setBounds(bounds: BrowserBounds): void {
-    this.bounds = bounds
-    this.layoutActiveViews()
-  }
-
-  private layoutActiveViews(): void {
-    if (!this.workspaceVisible || !this.bounds) return
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (!tab) return
-    const visible = !this.paletteOpen && !this.panelResizing
-    if (this.splitBaseUrl && tab.secondary) {
-      const leftWidth = Math.floor((this.bounds.width - 1) / 2)
-      tab.handle.view.setBounds(this.viewportBounds({ ...this.bounds, width: leftWidth }))
-      tab.secondary.view.setBounds(this.viewportBounds({ x: this.bounds.x + leftWidth + 1, y: this.bounds.y, width: this.bounds.width - leftWidth - 1, height: this.bounds.height }))
-      tab.secondary.view.setVisible(visible)
-    } else tab.handle.view.setBounds(this.viewportBounds(this.bounds))
-    tab.handle.view.setVisible(visible)
-  }
-
-  private viewportBounds(available: BrowserBounds): BrowserBounds {
-    if (this.viewportPreset === 'responsive') return available
-    const preset = viewportPresetSizes[this.viewportPreset]
-    const width = Math.min(available.width, preset.width)
-    const height = Math.min(available.height, preset.height)
-    return { x: available.x + Math.floor((available.width - width) / 2), y: available.y + Math.floor((available.height - height) / 2), width, height }
-  }
-
-  setViewportPreset(preset: ViewportPreset): void {
-    this.viewportPreset = preset
-    this.layoutActiveViews()
-  }
-
-  setPaletteOpen(open: boolean): void {
-    this.paletteOpen = open
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (!tab) return
-    for (const handle of [tab.handle, tab.secondary]) handle?.view.setVisible(this.workspaceVisible && !open && !this.panelResizing && this.bounds !== null)
-    if (open && this.workspaceVisible) this.window.webContents.focus()
-    if (!open && this.workspaceVisible && !this.panelResizing) tab.handle.view.webContents.focus()
-  }
-
-  async capturePreview(): Promise<BrowserPreview | null> {
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (!tab) return null
-    const [primary, secondary] = await Promise.all([
-      tab.handle.view.webContents.capturePage(undefined, { stayHidden: true }),
-      tab.secondary?.view.webContents.capturePage(undefined, { stayHidden: true })
-    ])
-    return { primary: primary.toDataURL(), ...(secondary ? { secondary: secondary.toDataURL() } : {}) }
-  }
-
-  setPanelResizing(resizing: boolean): void {
-    this.panelResizing = resizing
-    const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    if (!tab) return
-    for (const handle of [tab.handle, tab.secondary]) handle?.view.setVisible(this.workspaceVisible && !resizing && !this.paletteOpen && this.bounds !== null)
-    if (resizing && this.workspaceVisible) this.window.webContents.focus()
-  }
-
-  setWorkspaceVisible(visible: boolean): void {
-    if (!visible) {
-      const tab = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-      tab?.handle.view.setVisible(false)
-      tab?.secondary?.view.setVisible(false)
-    }
-    this.workspaceVisible = visible
-    if (visible) {
-      if (this.bounds) this.setBounds(this.bounds)
-      this.emitSnapshot()
-      if (this.activeTabId) this.window.webContents.send(browserChannels.navigationStateChanged, getNavigationState(this.getActiveView()))
-    }
-  }
-
-  create(): string {
+  create(url = '', muted = false, active = true, kind: TabKind = 'normal'): string {
     const id = crypto.randomUUID()
-    this.add(id)
-    this.select(id)
+    this.tabs.set(id, createTabState(id, url, muted, kind))
+    if (active) this.activeTabId = id
+    this.emitSnapshot()
     return id
   }
 
-  private open(url: string): void {
-    const destination = new URL(url)
-    if (!['http:', 'https:'].includes(destination.protocol)) return
-    const id = crypto.randomUUID()
-    this.add(id, destination.href)
-    this.select(id)
-  }
-
   select(id: string): void {
-    const next = this.tabs.get(id)
-    if (!next || id === this.activeTabId) return
-    const previous = this.activeTabId ? this.tabs.get(this.activeTabId) : undefined
-    previous?.handle.view.setVisible(false)
-    previous?.secondary?.view.setVisible(false)
+    if (!this.tabs.has(id) || id === this.activeTabId) return
+    void this.activeDevToolsTarget()?.elements.stopPicker(false)
     this.activeTabId = id
-    if (this.splitBaseUrl) void this.ensureSecondary(next).then(() => this.layoutActiveViews())
-    else this.layoutActiveViews()
     this.emitSnapshot()
   }
 
+  reorder(ids: string[]): void {
+    const currentIds = [...this.tabs.keys()]
+    if (ids.length !== currentIds.length || new Set(ids).size !== currentIds.length || ids.some((id) => !this.tabs.has(id))) throw new Error('Invalid tab order')
+    const orderedTabs = ids.map((id) => [id, this.tabs.get(id)!] as const)
+    this.tabs.clear()
+    for (const [id, tab] of orderedTabs) this.tabs.set(id, tab)
+    this.emitSnapshot()
+  }
+
+  updateState(update: TabStateUpdate): void {
+    const current = this.tabs.get(update.id)
+    if (!current) return
+    this.tabs.set(update.id, { ...current, ...update })
+    this.emitSnapshot()
+    if (update.id === this.activeTabId && !this.window.webContents.isDestroyed()) {
+      const { id: _id, favicon: _favicon, ...navigation } = this.tabs.get(update.id)!
+      this.window.webContents.send(browserChannels.navigationStateChanged, navigation)
+    }
+  }
+
   close(id: string): void {
-    if (!this.tabs.has(id)) return
+    const closed = this.tabs.get(id)
+    if (!closed) return
     const ids = [...this.tabs.keys()]
     if (ids.length === 1) this.activeTabId = null
     else if (id === this.activeTabId) {
       const index = ids.indexOf(id)
       this.activeTabId = ids[index + 1] ?? ids[index - 1]
     }
-    this.destroyTab(id)
-    if (this.workspaceVisible && this.bounds) {
-      if (this.splitBaseUrl && this.activeTabId) void this.ensureSecondary(this.tabs.get(this.activeTabId)!).then(() => this.layoutActiveViews())
-      else this.layoutActiveViews()
-    }
+    this.tabs.delete(id)
+    this.disposeTarget(id)
+    this.onTabClosed(closed)
     this.emitSnapshot()
   }
 
-  private destroyTab(id: string): void {
-    const tab = this.tabs.get(id)
+  setWebContentsTarget(tabId: string, webContentsId: number | null): void {
+    if (!this.tabs.has(tabId)) return
+    if (webContentsId === null) {
+      this.disposeTarget(tabId)
+      return
+    }
+    const contents = webContents.fromId(webContentsId)
+    if (!contents || contents.isDestroyed()) return
+    if (contents.session !== this.browserSession) throw new Error('Tab target belongs to another workspace session')
+    const existing = this.targets.get(tabId)
+    if (existing?.webContentsId === webContentsId) return
+    this.disposeTarget(tabId)
+    this.targets.set(tabId, this.createDevToolsTarget(tabId, contents))
+    this.applyAudioState(tabId)
+  }
+
+  tabIdForWebContents(webContentsId: number): string | null {
+    for (const [tabId, target] of this.targets) {
+      if (target.webContentsId === webContentsId && !target.contents.isDestroyed()) return tabId
+    }
+    return null
+  }
+
+  activeUrl(): string {
+    return this.activeTabId ? this.tabs.get(this.activeTabId)?.url ?? '' : ''
+  }
+
+  getActiveView(): never {
+    throw new Error('The visible browser runs as a DOM webview')
+  }
+
+  ensureActiveView(): never {
+    throw new Error('The visible browser runs as a DOM webview')
+  }
+
+  setSplitView(_baseUrl: string | null, _syncPath: boolean): Promise<void> { return Promise.resolve() }
+  setBounds(_bounds: BrowserBounds): void {}
+  setViewportPreset(_preset: ViewportPreset): void {}
+  setPaletteOpen(_open: boolean): void {}
+  setPanelResizing(_resizing: boolean): void {}
+  setChromeOverlayOpen(_open: boolean): void {}
+  setTooltipOpen(_open: boolean): void {}
+  setBrowserContentVisible(_visible: boolean): void {}
+  setWorkspaceVisible(visible: boolean): void {
+    if (!visible) void this.activeDevToolsTarget()?.elements.stopPicker(false)
+    if (visible) this.emitSnapshot()
+  }
+  capturePreview(): Promise<BrowserPreview | null> { return Promise.resolve(null) }
+  startNetworkCapture(): Promise<void> { return this.devToolsTarget().network.start() }
+  networkEntries(): NetworkEntry[] { return this.activeDevToolsTarget()?.network.snapshot() ?? [] }
+  clearNetworkEntries(): void { this.activeDevToolsTarget()?.network.clear() }
+  startConsoleCapture(): Promise<void> { return this.devToolsTarget().console.start() }
+  consoleEntries(): ConsoleEntry[] { return this.activeDevToolsTarget()?.console.snapshot() ?? [] }
+  executeConsoleExpression(expression: string): Promise<ConsoleEntry> { return this.devToolsTarget().console.evaluate(expression) }
+  consoleCompletions(prefix: string): Promise<string[]> { return this.devToolsTarget().console.completions(prefix) }
+  clearConsoleEntries(): void { this.activeDevToolsTarget()?.console.clear() }
+  elementsSnapshot(): Promise<ElementsSnapshot> { return this.devToolsTarget().elements.snapshot() }
+  selectElementNode(nodeId: number): Promise<void> { return this.devToolsTarget().elements.selectNode(nodeId) }
+  startElementPicker(): Promise<void> { return this.devToolsTarget().elements.startPicker() }
+  stopElementPicker(): Promise<void> { return this.activeDevToolsTarget()?.elements.stopPicker() ?? Promise.resolve() }
+  storageSnapshot(): Promise<StorageSnapshot> {
+    return this.devToolsTarget().storage.snapshot()
+  }
+  setStorageValue(mutation: StorageMutation): Promise<void> { return this.devToolsTarget().storage.setValue(mutation) }
+  removeCookie(identity: CookieIdentity): Promise<void> { return this.devToolsTarget().storage.removeCookie(identity) }
+  setAudioMuted(tabId: string, muted: boolean): void {
+    const tab = this.tabs.get(tabId)
     if (!tab) return
-    this.tabs.delete(id)
-    tab.console.dispose()
-    tab.network.dispose()
-    this.destroySecondary(tab)
-    tab.handle.disposeListeners()
-    if (!this.window.isDestroyed()) this.window.contentView.removeChildView(tab.handle.view)
-    if (!tab.handle.view.webContents.isDestroyed()) tab.handle.view.webContents.close()
+    this.tabs.set(tabId, { ...tab, isMuted: muted })
+    this.applyAudioState(tabId)
+    this.emitSnapshot()
   }
-
-  private destroySecondary(tab: ManagedTab): void {
-    const secondary = tab.secondary
-    if (!secondary) return
-    tab.secondary = undefined
-    secondary.disposeListeners()
-    if (!this.window.isDestroyed()) this.window.contentView.removeChildView(secondary.view)
-    if (!secondary.view.webContents.isDestroyed()) secondary.view.webContents.close()
+  hasDevToolsTarget(): boolean { return Boolean(this.activeDevToolsTarget()) }
+  activeTargetDescriptor(): { tabId: string; webContentsId: number } | null {
+    const target = this.activeDevToolsTarget()
+    return target ? { tabId: target.tabId, webContentsId: target.webContentsId } : null
   }
-
   dispose(): void {
-    if (this.networkUpdateTimer) clearTimeout(this.networkUpdateTimer)
-    if (this.consoleUpdateTimer) clearTimeout(this.consoleUpdateTimer)
-    for (const id of [...this.tabs.keys()]) this.destroyTab(id)
+    for (const tabId of [...this.targets.keys()]) this.disposeTarget(tabId)
+    this.tabs.clear()
   }
+
+  private devToolsTarget(): TabDevToolsTarget {
+    const target = this.activeDevToolsTarget()
+    if (!target) throw new Error('No active browser tab target is available')
+    return target
+  }
+
+  private activeDevToolsTarget(): TabDevToolsTarget | null {
+    if (!this.activeTabId) return null
+    const target = this.targets.get(this.activeTabId)
+    if (!target || target.contents.isDestroyed()) {
+      if (target) this.disposeTarget(this.activeTabId)
+      return null
+    }
+    return target
+  }
+
+  private createDevToolsTarget(tabId: string, contents: WebContents): TabDevToolsTarget {
+    const ensureAttached = async (): Promise<void> => {
+      if (!this.tabs.has(tabId) || contents.isDestroyed()) throw new Error('Tab is closed')
+      if (contents.session !== this.browserSession) throw new Error('Tab target belongs to another workspace session')
+      if (!contents.debugger.isAttached()) contents.debugger.attach('1.3')
+    }
+    const onAudioStateChanged = (): void => {
+      const tab = this.tabs.get(tabId)
+      if (!tab || contents.isDestroyed()) return
+      const isAudible = contents.isCurrentlyAudible()
+      if (tab.isAudible === isAudible) return
+      this.tabs.set(tabId, { ...tab, isAudible })
+      this.emitSnapshot()
+    }
+    contents.on('audio-state-changed', onAudioStateChanged)
+    const onDestroyed = (): void => {
+      contents.removeListener('audio-state-changed', onAudioStateChanged)
+      contents.removeListener('destroyed', onDestroyed)
+    }
+    contents.on('destroyed', onDestroyed)
+    return {
+      tabId,
+      webContentsId: contents.id,
+      contents,
+      onAudioStateChanged,
+      onDestroyed,
+      network: new NetworkCollector(contents, Promise.resolve(), () => this.sendNetworkChanged(), ensureAttached, this.preserveNetworkLog),
+      console: new ConsoleCollector(contents, ensureAttached, () => this.sendConsoleChanged(), this.preserveConsoleLog),
+      elements: new PageElements(contents, ensureAttached, () => this.sendElementsChanged()),
+      storage: new PageStorage(contents, ensureAttached)
+    }
+  }
+
+  private sendNetworkChanged(): void {
+    if (!this.window.webContents.isDestroyed()) this.window.webContents.send(browserChannels.networkChanged)
+  }
+
+  private sendConsoleChanged(): void {
+    if (!this.window.webContents.isDestroyed()) this.window.webContents.send(browserChannels.consoleChanged)
+  }
+
+  private sendElementsChanged(): void {
+    if (!this.window.webContents.isDestroyed()) this.window.webContents.send(browserChannels.elementsChanged)
+  }
+
+  private disposeTarget(tabId: string): void {
+    const target = this.targets.get(tabId)
+    if (!target) return
+    target.network.dispose()
+    target.console.dispose()
+    target.elements.dispose()
+    target.contents.removeListener('audio-state-changed', target.onAudioStateChanged)
+    target.contents.removeListener('destroyed', target.onDestroyed)
+    if (!target.contents.isDestroyed() && target.contents.debugger.isAttached()) target.contents.debugger.detach()
+    this.targets.delete(tabId)
+  }
+
+  private applyAudioState(tabId: string): void {
+    const target = this.targets.get(tabId)
+    const tab = this.tabs.get(tabId)
+    if (!target || !tab || target.contents.isDestroyed()) return
+    target.contents.setAudioMuted(tab.isMuted)
+  }
+}
+
+type TabDevToolsTarget = {
+  tabId: string
+  webContentsId: number
+  contents: WebContents
+  onAudioStateChanged: () => void
+  onDestroyed: () => void
+  network: NetworkCollector
+  console: ConsoleCollector
+  elements: PageElements
+  storage: PageStorage
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw, Server } from 'lucide-react'
 import type { LocalService } from '../../../shared/contracts/browser'
+import { browserDom } from '../browserDomController'
 
 export function LocalServicesPopover(): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -40,7 +41,7 @@ export function LocalServicesPopover(): React.JSX.Element {
     setOpen(false)
     await window.devBrowser.layout.setPaletteOpen(false)
     await window.devBrowser.tabs.create()
-    await window.devBrowser.navigation.navigate(service.url)
+    await browserDom.navigate(service.url)
   }
 
   return <div className="local-services" ref={root}>
