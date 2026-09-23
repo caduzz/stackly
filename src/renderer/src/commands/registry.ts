@@ -1,3 +1,4 @@
+import type { DevPanelKind } from '../components/DevPanel'
 import type { TabState, Workspace } from '../../../shared/contracts/browser'
 import { formatShortcut, indexedShortcut, shortcutById, type ShortcutId } from '../../../shared/shortcuts'
 import { browserDom } from '../browserDomController'
@@ -18,7 +19,7 @@ type Context = {
   workspaces: Workspace[]
   activeWorkspaceId: string
   toggleDevPanel: () => void
-  openPanel: (panel: 'network' | 'console') => void
+  openPanel: (panel: DevPanelKind) => void
   openSettings: () => void
   openHistory: () => void
   platform: string
@@ -66,6 +67,7 @@ export function createCommands(context: Context): Command[] {
     withShortcut({ id: 'toggle-dev-panel', label: 'Toggle Dev Panel', category: 'Developer Tools', keywords: ['tools', 'show', 'hide'], execute: context.toggleDevPanel }, 'toggle-dev-panel', context.platform),
     withShortcut({ id: 'open-network', label: 'Open Network', category: 'Developer Tools', keywords: ['requests', 'dev panel'], execute: () => context.openPanel('network') }, 'open-network', context.platform),
     withShortcut({ id: 'open-console', label: 'Open Console', category: 'Developer Tools', keywords: ['logs', 'dev panel'], execute: () => context.openPanel('console') }, 'open-console', context.platform),
+    withShortcut({ id: 'open-drm-diagnostics', label: 'Open DRM Diagnostics', category: 'Developer Tools', keywords: ['widevine', 'eme', 'protected content'], execute: () => context.openPanel('drm') }, 'open-drm-diagnostics', context.platform),
     withShortcut({ id: 'open-history', label: 'Open History', category: 'Browser', keywords: ['visited', 'pages', 'navigation'], execute: context.openHistory }, 'open-history', context.platform),
     withShortcut({ id: 'open-settings', label: 'Open Settings', category: 'Application', keywords: ['preferences', 'configuration'], execute: context.openSettings }, 'open-settings', context.platform)
   ]

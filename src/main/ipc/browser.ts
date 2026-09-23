@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
+import { BrowserWindow, ipcMain, shell, webContents, type IpcMainInvokeEvent } from 'electron'
 import { apiRequestIdSchema, apiSendRequestSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, elementNodeIdSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, navigateSchema, navigationHistoryVisitSchema, splitViewSchema, storageMutationSchema, tabIdSchema, tabOrderSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema } from '../../shared/contracts/browser'
 import { sendApiRequest } from '../api/sendApiRequest'
 import { generateThemeFromImage } from '../browser/imageTheme'
@@ -6,6 +6,7 @@ import type { WorkspaceManager } from '../workspaces/WorkspaceManager'
 import type { TerminalManager } from '../terminal/TerminalManager'
 import { scanLocalServices } from '../local/LocalServiceDetector'
 import { captureScreenshot } from '../screenshots/captureScreenshot'
+import { runProtectedContentDiagnostics } from '../drm/protectedContentDiagnostics'
 
 export function registerBrowserIpc(allowedSenderIds: Set<number>, workspaceManagers: Map<number, WorkspaceManager>, terminalManagers: Map<number, TerminalManager>): void {
   const apiRequests = new Map<string, AbortController>()
@@ -232,6 +233,10 @@ export function registerBrowserIpc(allowedSenderIds: Set<number>, workspaceManag
     const window = BrowserWindow.fromWebContents(event.sender)
     if (!window) throw new Error('Browser window is unavailable')
     return captureScreenshot(window, window.webContents)
+  })
+  ipcMain.handle(browserChannels.getProtectedContentDiagnostics, (event) => {
+    const target = getWorkspaces(event).resolveActiveTarget()
+    return runProtectedContentDiagnostics(target ? webContents.fromId(target.webContentsId) ?? null : null)
   })
   ipcMain.handle(browserChannels.getSettings, (event) => getWorkspaces(event).getSettings())
   ipcMain.handle(browserChannels.updateSettings, (event, raw: unknown) => getWorkspaces(event).updateSettings(browserSettingsSchema.parse(raw)))

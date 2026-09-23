@@ -11,6 +11,7 @@ export type ShortcutId =
   | 'toggle-dev-panel'
   | 'open-network'
   | 'open-console'
+  | 'open-drm-diagnostics'
   | 'open-settings'
   | 'open-history'
   | `workspace:${number}`
