@@ -25,7 +25,7 @@ import { normalizeAddress } from './normalizeAddress'
 import { browserDom, setBrowserDomController } from './browserDomController'
 import { devicePresetCategories, devicePresetsByCategory, instantiateDeviceFromPreset, type DevicePreset } from './devices/presets'
 import { applyStartupTheme, startupConfig } from './startupTheme'
-import { useDevicesCanvasStore, type VirtualDevice } from './stores/devicesCanvas'
+import { useDevicesCanvasStore, type NewVirtualDevice, type VirtualDevice } from './stores/devicesCanvas'
 import { useTabsStore } from './stores/tabs'
 import { useWorkspacesStore } from './stores/workspaces'
 
@@ -937,32 +937,71 @@ function CanvasViewport({ activeTabId, devices, environments, isMuted, pan, part
   </div>
 }
 
-function DevicesCanvas({ currentUrl, onResponsive }: { currentUrl: string; onResponsive: () => void }): React.JSX.Element {
+function DevicesCanvas({ active, currentUrl, tab, workspace, onResponsive }: { active: boolean; currentUrl: string; tab: TabState; workspace: Workspace; onResponsive: () => void }): React.JSX.Element {
   const [addOpen, setAddOpen] = useState(false)
+  const [devices, setDevices] = useState<VirtualDevice[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [spacePressed, setSpacePressed] = useState(false)
   const [syncNavigation, setSyncNavigation] = useState(false)
   const viewportRef = useRef<HTMLDivElement>(null)
-  const hydratedCanvasKey = useRef<string | null>(null)
+  const hydrated = useRef(false)
   const lastSavedLayout = useRef('')
-  const activeTabId = useTabsStore((state) => state.activeTabId)
-  const activeTab = useTabsStore((state) => state.tabs.find((tab) => tab.id === state.activeTabId))
-  const activeWorkspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
-  const activeWorkspace = useWorkspacesStore((state) => state.workspaces.find((workspace) => workspace.id === state.activeWorkspaceId))
-  const devices = useDevicesCanvasStore((state) => state.devices)
-  const selectedDeviceId = useDevicesCanvasStore((state) => state.selectedDeviceId)
-  const addDevice = useDevicesCanvasStore((state) => state.addDevice)
-  const removeDevice = useDevicesCanvasStore((state) => state.removeDevice)
-  const replaceLayout = useDevicesCanvasStore((state) => state.replaceLayout)
-  const selectDevice = useDevicesCanvasStore((state) => state.selectDevice)
-  const updateDevice = useDevicesCanvasStore((state) => state.updateDevice)
-  const updatePosition = useDevicesCanvasStore((state) => state.updatePosition)
+  const mirrorActiveLayout = useDevicesCanvasStore((state) => state.replaceLayout)
+
+  function selectedDevices(nextDevices: VirtualDevice[], nextSelectedId: string | null): VirtualDevice[] {
+    return nextDevices.map((device) => ({ ...device, isSelected: device.id === nextSelectedId }))
+  }
+
+  function nextDeviceZIndex(nextDevices: VirtualDevice[]): number {
+    return Math.max(0, ...nextDevices.map((device) => device.zIndex)) + 1
+  }
+
+  function addLocalDevice(device: NewVirtualDevice): string {
+    const id = device.id ?? crypto.randomUUID()
+    setDevices((current) => {
+      const nextDevice: VirtualDevice = {
+        ...device,
+        id,
+        displayScale: device.displayScale ?? 1,
+        isSelected: device.isSelected ?? true,
+        zIndex: device.zIndex ?? nextDeviceZIndex(current)
+      }
+      const shouldSelect = nextDevice.isSelected
+      if (shouldSelect) setSelectedDeviceId(id)
+      const currentDevices = shouldSelect ? selectedDevices(current, null) : current
+      return [...currentDevices, nextDevice]
+    })
+    return id
+  }
+
+  function removeLocalDevice(id: string): void {
+    setDevices((current) => current.filter((device) => device.id !== id))
+    setSelectedDeviceId((current) => current === id ? null : current)
+  }
+
+  function selectLocalDevice(id: string | null): void {
+    setDevices((current) => {
+      const nextSelectedId = id && current.some((device) => device.id === id) ? id : null
+      setSelectedDeviceId(nextSelectedId)
+      const promotedZIndex = nextSelectedId ? nextDeviceZIndex(current) : null
+      return selectedDevices(current, nextSelectedId).map((device) => device.id === nextSelectedId && promotedZIndex ? { ...device, zIndex: promotedZIndex } : device)
+    })
+  }
+
+  const updateLocalDevice = useCallback((id: string, patch: Partial<Omit<VirtualDevice, 'id'>>): void => {
+    setDevices((current) => current.map((device) => device.id === id ? { ...device, ...patch, id } : device))
+  }, [])
+
+  function updateLocalPosition(id: string, position: Pick<VirtualDevice, 'x' | 'y'>): void {
+    setDevices((current) => current.map((device) => device.id === id ? { ...device, ...position } : device))
+  }
 
   function addPreset(preset: DevicePreset): void {
     const index = devices.length
-    const activeEnvironment = activeWorkspace?.environments.find((environment) => environment.id === activeWorkspace.activeEnvironmentId) ?? null
-    addDevice(instantiateDeviceFromPreset(preset, {
+    const activeEnvironment = workspace.environments.find((environment) => environment.id === workspace.activeEnvironmentId) ?? null
+    addLocalDevice(instantiateDeviceFromPreset(preset, {
       x: 72 + index * 36,
       y: 72 + index * 32,
       url: deviceEnvironmentUrl(currentUrl === 'about:blank' ? '' : currentUrl, activeEnvironment),
@@ -993,23 +1032,23 @@ function DevicesCanvas({ currentUrl, onResponsive }: { currentUrl: string; onRes
   const handleDeviceNavigate = useCallback((id: string, url: string): void => {
     const source = devices.find((device) => device.id === id)
     if (!source || source.url === url) return
-    updateDevice(id, { url })
+    updateLocalDevice(id, { url })
     if (!syncNavigation) return
     for (const device of devices) {
       if (device.id === id) continue
       const destination = deviceRouteDestination(device.url, url)
-      if (destination && destination !== device.url) updateDevice(device.id, { url: destination })
+      if (destination && destination !== device.url) updateLocalDevice(device.id, { url: destination })
     }
-  }, [devices, syncNavigation, updateDevice])
+  }, [devices, syncNavigation, updateLocalDevice])
 
   function resizeDevice(id: string, displayScale: number): void {
-    updateDevice(id, { displayScale })
+    updateLocalDevice(id, { displayScale })
   }
 
   function rotateDevice(id: string): void {
     const device = devices.find((item) => item.id === id)
     if (!device) return
-    updateDevice(id, { orientation: device.orientation === 'portrait' ? 'landscape' : 'portrait' })
+    updateLocalDevice(id, { orientation: device.orientation === 'portrait' ? 'landscape' : 'portrait' })
   }
 
   function fitToScreen(): void {
@@ -1032,7 +1071,7 @@ function DevicesCanvas({ currentUrl, onResponsive }: { currentUrl: string; onRes
 
   useEffect(() => {
     function updateSpace(event: KeyboardEvent): void {
-      if (event.code !== 'Space') return
+      if (!active || event.code !== 'Space') return
       const target = event.target as HTMLElement | null
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '') || target?.isContentEditable) return
       setSpacePressed(event.type === 'keydown')
@@ -1044,80 +1083,75 @@ function DevicesCanvas({ currentUrl, onResponsive }: { currentUrl: string; onRes
       window.removeEventListener('keydown', updateSpace)
       window.removeEventListener('keyup', updateSpace)
     }
-  }, [])
+  }, [active])
 
   useEffect(() => {
-    const canvasKey = activeWorkspaceId && activeTabId ? `${activeWorkspaceId}:${activeTabId}` : null
     let cancelled = false
-    hydratedCanvasKey.current = null
-    lastSavedLayout.current = ''
-    replaceLayout([], null)
-    setZoom(1)
-    setPan({ x: 0, y: 0 })
-    setSyncNavigation(false)
-    if (!activeTabId || !canvasKey) return
-    void window.devBrowser.devices.getLayout(activeTabId).then((layout) => {
+    void window.devBrowser.devices.getLayout(tab.id).then((layout) => {
       if (cancelled) return
       if (layout) {
-        replaceLayout(layout.devices, layout.selectedDeviceId)
+        setDevices(selectedDevices(layout.devices.map((device) => ({ ...device, displayScale: device.displayScale ?? 1 })), layout.selectedDeviceId))
+        setSelectedDeviceId(layout.selectedDeviceId && layout.devices.some((device) => device.id === layout.selectedDeviceId) ? layout.selectedDeviceId : null)
         setZoom(layout.zoom)
         setPan(layout.pan)
         setSyncNavigation(layout.syncNavigation)
         lastSavedLayout.current = JSON.stringify(layout)
       } else {
-        replaceLayout([], null)
+        const preset = devicePresetsByCategory('Mobile')[1] ?? devicePresetsByCategory('Mobile')[0]
+        const activeEnvironment = workspace.environments.find((environment) => environment.id === workspace.activeEnvironmentId) ?? null
+        const initialId = crypto.randomUUID()
+        const initialDevice = instantiateDeviceFromPreset(preset, { x: 72, y: 72, url: deviceEnvironmentUrl(currentUrl === 'about:blank' ? '' : currentUrl, activeEnvironment), environmentId: activeEnvironment?.id ?? null })
+        setDevices(selectedDevices([{ ...initialDevice, id: initialId, displayScale: initialDevice.displayScale ?? 1, isSelected: true, zIndex: initialDevice.zIndex ?? 1 }], initialId))
+        setSelectedDeviceId(initialId)
         setZoom(1)
         setPan({ x: 0, y: 0 })
         setSyncNavigation(false)
       }
-      hydratedCanvasKey.current = canvasKey
-      if (!layout && activeTab?.kind === 'device') {
-        const preset = devicePresetsByCategory('Mobile')[1] ?? devicePresetsByCategory('Mobile')[0]
-        const activeEnvironment = activeWorkspace?.environments.find((environment) => environment.id === activeWorkspace.activeEnvironmentId) ?? null
-        addDevice(instantiateDeviceFromPreset(preset, { x: 72, y: 72, url: deviceEnvironmentUrl(currentUrl === 'about:blank' ? '' : currentUrl, activeEnvironment), environmentId: activeEnvironment?.id ?? null }))
-      }
+      hydrated.current = true
     }).catch((error: unknown) => {
       if (cancelled) return
       console.error('Failed to load devices canvas layout', error)
-      hydratedCanvasKey.current = canvasKey
+      hydrated.current = true
     })
     return () => { cancelled = true }
-  }, [activeTab?.kind, activeTabId, activeWorkspace, activeWorkspaceId, addDevice, currentUrl, replaceLayout])
+  }, [tab.id])
 
   useEffect(() => {
-    if (activeTab?.kind !== 'device') return
+    if (!active) return
+    mirrorActiveLayout(devices, selectedDeviceId)
+  }, [active, devices, mirrorActiveLayout, selectedDeviceId])
+
+  useEffect(() => {
+    if (!active) return
     const selectedId = selectedDeviceId ?? devices[0]?.id ?? null
     setBrowserDomController({
       navigate: async (url) => {
-        if (selectedId) updateDevice(selectedId, { url })
+        if (selectedId) updateLocalDevice(selectedId, { url })
       },
       back: async () => { deviceWebview(selectedId)?.goBack() },
       forward: async () => { deviceWebview(selectedId)?.goForward() },
       reload: async () => { deviceWebview(selectedId)?.reload() }
     })
-  }, [activeTab?.kind, devices, selectedDeviceId, updateDevice])
+  }, [active, devices, selectedDeviceId, updateLocalDevice])
 
   useEffect(() => {
-    if (!activeWorkspaceId || !activeTabId) return
-    const canvasKey = `${activeWorkspaceId}:${activeTabId}`
-    if (hydratedCanvasKey.current !== canvasKey) return
+    if (!hydrated.current) return
     const layout: DevicesCanvasLayout = { devices, selectedDeviceId, zoom, pan, syncNavigation }
     const signature = JSON.stringify(layout)
     if (signature === lastSavedLayout.current) return
     const save = window.setTimeout(() => {
-      void window.devBrowser.devices.saveLayout(activeTabId, layout).then(() => {
+      void window.devBrowser.devices.saveLayout(tab.id, layout).then(() => {
         lastSavedLayout.current = signature
       }).catch((error: unknown) => console.error('Failed to save devices canvas layout', error))
     }, 250)
     return () => window.clearTimeout(save)
-  }, [activeTabId, activeWorkspaceId, devices, pan, selectedDeviceId, syncNavigation, zoom])
+  }, [devices, pan, selectedDeviceId, syncNavigation, tab.id, zoom])
 
-  return <div className="devices-canvas">
+  return <div className={`devices-canvas${active ? '' : ' is-hidden'}`} aria-hidden={!active}>
     <CanvasToolbar addOpen={addOpen} syncNavigation={syncNavigation} zoom={zoom} onAddClick={() => setAddOpen((open) => !open)} onFitToScreen={fitToScreen} onPresetSelect={addPreset} onResponsive={onResponsive} onResetView={resetView} onResetZoom={() => setClampedZoom(1)} onSyncNavigationChange={setSyncNavigation} onZoomIn={() => setClampedZoom(zoom + 0.25)} onZoomOut={() => setClampedZoom(zoom - 0.25)} />
-    <CanvasViewport activeTabId={activeTabId} devices={devices} environments={activeWorkspace?.environments ?? []} isMuted={Boolean(activeTab?.isMuted)} pan={pan} partition={activeWorkspace?.sessionPartition ?? 'persist:stackly-devices'} spacePressed={spacePressed} viewportRef={viewportRef} zoom={zoom} onAddClick={() => setAddOpen(true)} onApplySettings={updateDevice} onCaptureScreenshot={captureDeviceScreenshot} onMove={updatePosition} onNavigate={handleDeviceNavigate} onPan={setPan} onRemove={removeDevice} onResize={resizeDevice} onRotate={rotateDevice} onSelect={selectDevice} />
+    <CanvasViewport activeTabId={tab.id} devices={devices} environments={workspace.environments} isMuted={Boolean(tab.isMuted)} pan={pan} partition={workspace.sessionPartition} spacePressed={spacePressed} viewportRef={viewportRef} zoom={zoom} onAddClick={() => setAddOpen(true)} onApplySettings={updateLocalDevice} onCaptureScreenshot={captureDeviceScreenshot} onMove={updateLocalPosition} onNavigate={handleDeviceNavigate} onPan={setPan} onRemove={removeLocalDevice} onResize={resizeDevice} onRotate={rotateDevice} onSelect={selectLocalDevice} />
   </div>
 }
-
 function deviceBounds(devices: VirtualDevice[]): { x: number; y: number; width: number; height: number } {
   const boxes = devices.map((device) => {
     const size = visualDeviceFrameSize(device)
@@ -1234,11 +1268,15 @@ function BrowserArea({ empty, hasActiveTab, settings, primaryLabel, secondaryEnv
         const activeRecord = workspaceReady && record.workspace.id === activeWorkspaceId
         const recordHidden = !activeRecord || devicesCanvas || Boolean(internalPage) || empty
         return <div key={record.workspace.id} className={`browser-webviews${activeRecord && secondaryUrl && !devicesCanvas ? ' is-split' : ''}${activeRecord && constrainedViewport ? ' is-constrained' : ''}${recordHidden ? ' is-hidden' : ''}`} style={activeRecord ? viewportStyle : undefined} aria-hidden={recordHidden}>
-          {orderedTabs(record.workspace.id, record.tabs).map((tab) => <BrowserWebview key={`${record.workspace.id}:${tab.id}`} workspaceId={record.workspace.id} tabId={tab.id} url={tab.url} active={activeRecord && !devicesCanvas && !internalPage && !empty && tab.id === record.activeTabId} partition={record.workspace.sessionPartition} register={registerWebview} />)}
+          {orderedTabs(record.workspace.id, record.tabs).filter((tab) => tab.kind !== 'device').map((tab) => <BrowserWebview key={`${record.workspace.id}:${tab.id}`} workspaceId={record.workspace.id} tabId={tab.id} url={tab.url} active={activeRecord && !devicesCanvas && !internalPage && !empty && tab.id === record.activeTabId} partition={record.workspace.sessionPartition} register={registerWebview} />)}
           {activeRecord && secondaryUrl && !devicesCanvas && !internalPage && !empty && <webview className="browser-webview browser-webview-secondary is-active" src={secondaryUrl} partition={record.workspace.sessionPartition} webpreferences="contextIsolation=yes,sandbox=yes" />}
         </div>
       })}
-      {internalPage?.kind === 'commit' ? <CommitPage commit={internalPage.commit} /> : internalPage?.kind === 'diff' ? <DiffPage diff={internalPage.diff} /> : devicesCanvas ? <DevicesCanvas currentUrl={activeTab?.url ?? ''} onResponsive={() => onPresetChange('responsive')} /> : empty ? <EmptyBrowserState backgroundImage={settings.theme.backgroundImage} hasActiveTab={hasActiveTab} /> : preview && <div className={`browser-preview${preview.secondary ? ' is-split' : ''}`} aria-hidden="true">
+      {Object.values(mountedWorkspaces).flatMap((record) => orderedTabs(record.workspace.id, record.tabs).filter((tab) => tab.kind === 'device').map((tab) => {
+        const activeSurface = workspaceReady && record.workspace.id === activeWorkspaceId && devicesCanvas && !internalPage && tab.id === activeTabId
+        return <DevicesCanvas key={`${record.workspace.id}:${tab.id}`} active={activeSurface} currentUrl={tab.url} tab={tab} workspace={record.workspace} onResponsive={() => onPresetChange('responsive')} />
+      }))}
+      {internalPage?.kind === 'commit' ? <CommitPage commit={internalPage.commit} /> : internalPage?.kind === 'diff' ? <DiffPage diff={internalPage.diff} /> : empty ? <EmptyBrowserState backgroundImage={settings.theme.backgroundImage} hasActiveTab={hasActiveTab} /> : preview && <div className={`browser-preview${preview.secondary ? ' is-split' : ''}`} aria-hidden="true">
         <div className="browser-preview-cell"><img src={preview.primary} alt="" /></div>
         {preview.secondary && <div className="browser-preview-cell"><img src={preview.secondary} alt="" /></div>}
       </div>}
@@ -1492,3 +1530,4 @@ export default function App(): React.JSX.Element {
     <TooltipLayer />
   </main>
 }
+
