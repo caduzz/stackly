@@ -12,6 +12,7 @@ export function NetworkDetails({ entry }: { entry: NetworkEntry }): React.JSX.El
   return <aside className="network-details" aria-label="Request details">
     <div className="network-details-title" title={entry.url}>{entry.method} {entry.url}</div>
     {entry.failed && <p className="network-failure">{entry.failureReason ?? 'Request failed'}</p>}
+    {entry.blockedBy === 'adblock' && <p className="network-block-reason">{entry.blockReason ?? 'Matched an AdBlock filter.'}</p>}
     <HeaderGroup title="Request Headers" values={entry.requestHeaders} />
     <HeaderGroup title="Response Headers" values={entry.responseHeaders} />
   </aside>

@@ -162,10 +162,21 @@ export function registerBrowserIpc(allowedSenderIds: Set<number>, workspaceManag
     await getWorkspaces(event).resolveActiveTarget()?.tools.startNetworkCapture()
   })
   ipcMain.handle(browserChannels.getNetworkEntries, (event) => {
-    return getWorkspaces(event).resolveActiveTarget()?.tools.networkEntries() ?? []
+    const manager = getWorkspaces(event)
+    const networkEntries = manager.resolveActiveTarget()?.tools.networkEntries() ?? []
+    return [...networkEntries, ...manager.activeAdBlockNetworkEntries()]
   })
   ipcMain.handle(browserChannels.clearNetworkEntries, (event) => {
     getWorkspaces(event).resolveActiveTarget()?.tools.clearNetworkEntries()
+  })
+  ipcMain.handle(browserChannels.getAdBlockStatus, (event) => getWorkspaces(event).getAdBlockStatus())
+  ipcMain.handle(browserChannels.setAdBlockEnabled, (event, enabled: unknown) => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid AdBlock enabled state')
+    return getWorkspaces(event).setAdBlockEnabled(enabled)
+  })
+  ipcMain.handle(browserChannels.setAdBlockSiteAllowed, (event, allowed: unknown) => {
+    if (typeof allowed !== 'boolean') throw new Error('Invalid AdBlock site exception state')
+    return getWorkspaces(event).setAdBlockSiteAllowed(allowed)
   })
   ipcMain.handle(browserChannels.startConsoleCapture, async (event) => {
     await getWorkspaces(event).resolveActiveTarget()?.tools.startConsoleCapture()

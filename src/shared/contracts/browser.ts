@@ -158,9 +158,35 @@ export const networkEntrySchema = z.strictObject({
   requestHeaders: z.record(z.string(), z.string()).optional(),
   responseHeaders: z.record(z.string(), z.string()).optional(),
   failed: z.boolean(),
-  failureReason: z.string().optional()
+  failureReason: z.string().optional(),
+  blockedBy: z.enum(['adblock']).optional(),
+  blockReason: z.string().optional()
 })
 export type NetworkEntry = z.infer<typeof networkEntrySchema>
+
+export const adBlockSettingsSchema = z.strictObject({
+  enabled: z.boolean(),
+  siteExceptions: z.array(z.string().trim().min(1).max(253)).default([])
+})
+export type AdBlockSettings = z.infer<typeof adBlockSettingsSchema>
+export const adBlockStatusSchema = z.strictObject({
+  enabled: z.boolean(),
+  siteHostname: z.string().nullable(),
+  siteAllowed: z.boolean(),
+  blockedInTarget: z.number().int().nonnegative(),
+  blockedInWorkspace: z.number().int().nonnegative()
+})
+export type AdBlockStatus = z.infer<typeof adBlockStatusSchema>
+export const adBlockBlockedRequestSchema = z.strictObject({
+  requestId: z.string(),
+  url: z.string(),
+  method: z.string(),
+  type: z.string().optional(),
+  reason: z.string(),
+  blockedAt: z.number(),
+  webContentsId: z.number().int().positive()
+})
+export type AdBlockBlockedRequest = z.infer<typeof adBlockBlockedRequestSchema>
 
 export const consoleEntrySchema = z.strictObject({
   id: z.string(),
@@ -560,6 +586,9 @@ export const browserChannels = {
   getNetworkEntries: 'browser:network:get-entries',
   clearNetworkEntries: 'browser:network:clear',
   networkChanged: 'browser:network:changed',
+  getAdBlockStatus: 'browser:adblock:get-status',
+  setAdBlockEnabled: 'browser:adblock:set-enabled',
+  setAdBlockSiteAllowed: 'browser:adblock:set-site-allowed',
   startConsoleCapture: 'browser:console:start-capture',
   getConsoleEntries: 'browser:console:get-entries',
   executeConsoleExpression: 'browser:console:execute',
@@ -659,6 +688,11 @@ export type DevBrowserApi = {
     getEntries: () => Promise<NetworkEntry[]>
     clear: () => Promise<void>
     onEntriesChanged: (listener: () => void) => () => void
+  }
+  adBlock: {
+    getStatus: () => Promise<AdBlockStatus>
+    setEnabled: (enabled: boolean) => Promise<AdBlockStatus>
+    setSiteAllowed: (allowed: boolean) => Promise<AdBlockStatus>
   }
   console: {
     startCapture: () => Promise<void>

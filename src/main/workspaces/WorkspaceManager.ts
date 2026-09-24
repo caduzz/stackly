@@ -1,5 +1,5 @@
 import { session, webContents, type BrowserWindow, type Session } from 'electron'
-import { audioCenterTargetSchema, browserChannels, environmentConfigSchema, navigationHistoryVisitSchema, workspaceNameSchema, type AudioCenterCommand, type AudioCenterSession, type AudioCenterTarget, type BrowserBounds, type BrowserSettings, type ConsoleEntry, type CookieIdentity, type DevicesCanvasLayout, type ElementsSnapshot, type Environment, type EnvironmentConfig, type NavigationHistoryEntry, type NavigationHistoryVisit, type NavigationState, type NetworkEntry, type StorageMutation, type StorageSnapshot, type TabWebContentsTarget, type TabsSnapshot, type TabState, type ViewportPreset, type Workspace, type WorkspacesSnapshot } from '../../shared/contracts/browser'
+import { audioCenterTargetSchema, browserChannels, environmentConfigSchema, navigationHistoryVisitSchema, workspaceNameSchema, type AdBlockStatus, type AudioCenterCommand, type AudioCenterSession, type AudioCenterTarget, type BrowserBounds, type BrowserSettings, type ConsoleEntry, type CookieIdentity, type DevicesCanvasLayout, type ElementsSnapshot, type Environment, type EnvironmentConfig, type NavigationHistoryEntry, type NavigationHistoryVisit, type NavigationState, type NetworkEntry, type StorageMutation, type StorageSnapshot, type TabWebContentsTarget, type TabsSnapshot, type TabState, type ViewportPreset, type Workspace, type WorkspacesSnapshot } from '../../shared/contracts/browser'
 import { TabManager } from '../tabs/TabManager'
 import { SettingsRepository } from '../storage/SettingsRepository'
 import { WorkspaceRepository } from '../storage/WorkspaceRepository'
@@ -10,8 +10,9 @@ import { chromeLikeUserAgent } from '../browser/userAgent'
 import { DeviceViewManager } from '../devices/DeviceViewManager'
 import type { DownloadEntry } from '../../shared/contracts/browser'
 import { AudioCenter } from '../media/AudioCenter'
+import { AdBlockService } from '../adblock/AdBlockService'
 
-type ManagedWorkspace = { data: Workspace; tabs: TabManager; deviceViews: DeviceViewManager; downloads: DownloadTracker; browserSession: Session; disposePermissions: () => void }
+type ManagedWorkspace = { data: Workspace; tabs: TabManager; deviceViews: DeviceViewManager; downloads: DownloadTracker; adBlock: AdBlockService; browserSession: Session; disposePermissions: () => void }
 type ClosedTabRecord = { workspaceId: string; url: string; title: string; isMuted: boolean; kind: TabState['kind'] }
 type ActiveTargetTools = {
   startNetworkCapture: () => Promise<void>
@@ -112,8 +113,9 @@ export class WorkspaceManager {
     const downloads = new DownloadTracker(workspaceSession, () => {
       if (this.activeWorkspaceId === data.id) this.emitDownloads()
     })
+    const adBlock = new AdBlockService(data.id, workspaceSession, this.settings, () => this.emitNetworkChanged())
     if (this.bounds) tabs.setBounds(this.bounds)
-    this.workspaces.set(data.id, { data, tabs, deviceViews, downloads, browserSession: workspaceSession, disposePermissions: configureSessionPermissions(workspaceSession) })
+    this.workspaces.set(data.id, { data, tabs, deviceViews, downloads, adBlock, browserSession: workspaceSession, disposePermissions: configureSessionPermissions(workspaceSession) })
   }
 
   create(): string {
@@ -139,6 +141,7 @@ export class WorkspaceManager {
     this.repository.deleteWorkspace(id)
     for (const key of [...this.historyKeys.keys()]) if (key.startsWith(`${id}:`)) this.historyKeys.delete(key)
     workspace.downloads.dispose()
+    workspace.adBlock.dispose()
     workspace.deviceViews.dispose()
     workspace.disposePermissions()
     workspace.tabs.dispose()
@@ -334,6 +337,33 @@ export class WorkspaceManager {
     return target
   }
 
+  activeAdBlockNetworkEntries(): NetworkEntry[] {
+    const target = this.resolveActiveTarget()
+    if (!target) return []
+    return this.adBlockNetworkEntries(target.workspaceId, target.webContentsId)
+  }
+
+  getAdBlockStatus(): AdBlockStatus {
+    const target = this.resolveActiveTarget()
+    const workspace = this.activeWorkspace()
+    const url = this.urlForAdBlockTarget(target?.webContentsId ?? null) || workspace.tabs.activeUrl()
+    return workspace.adBlock.getStatus(url, target?.webContentsId ?? null)
+  }
+
+  setAdBlockEnabled(enabled: boolean): AdBlockStatus {
+    const workspace = this.activeWorkspace()
+    workspace.adBlock.setEnabled(enabled)
+    return this.getAdBlockStatus()
+  }
+
+  setAdBlockSiteAllowed(allowed: boolean): AdBlockStatus {
+    const workspace = this.activeWorkspace()
+    const target = this.resolveActiveTarget()
+    const url = this.urlForAdBlockTarget(target?.webContentsId ?? null) || workspace.tabs.activeUrl()
+    workspace.adBlock.setSiteAllowed(url, allowed)
+    return this.getAdBlockStatus()
+  }
+
   getDevicesCanvasLayout(tabId: string): DevicesCanvasLayout | null {
     return this.repository.getDevicesCanvasLayout(this.activeWorkspace().data.id, tabId)
   }
@@ -457,6 +487,32 @@ export class WorkspaceManager {
     }
   }
 
+  private emitNetworkChanged(): void {
+    if (!this.window.webContents.isDestroyed()) this.window.webContents.send(browserChannels.networkChanged)
+  }
+
+  private urlForAdBlockTarget(webContentsId: number | null): string {
+    if (!webContentsId) return ''
+    const contents = webContents.fromId(webContentsId)
+    return contents && !contents.isDestroyed() ? contents.getURL() : ''
+  }
+
+  private adBlockNetworkEntries(workspaceId: string, webContentsId: number): NetworkEntry[] {
+    const workspace = this.workspaces.get(workspaceId)
+    if (!workspace) return []
+    return workspace.adBlock.getBlockedRequests(webContentsId).map((request) => ({
+      requestId: request.requestId,
+      url: request.url,
+      method: request.method,
+      type: request.type,
+      startTime: request.blockedAt,
+      failed: true,
+      failureReason: 'Blocked by Stackly AdBlock',
+      blockedBy: 'adblock',
+      blockReason: request.reason
+    }))
+  }
+
   private rememberClosedTab(workspaceId: string, tab: TabState): void {
     this.closedTabs.unshift({ workspaceId, url: tab.url, title: tab.title, isMuted: tab.isMuted, kind: tab.kind })
     this.closedTabs.splice(20)
@@ -472,6 +528,7 @@ export class WorkspaceManager {
     this.audioCenter.dispose()
     for (const workspace of this.workspaces.values()) {
       workspace.downloads.dispose()
+      workspace.adBlock.dispose()
       workspace.deviceViews.dispose()
       workspace.disposePermissions()
       workspace.tabs.dispose()

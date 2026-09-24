@@ -1,7 +1,7 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Camera, Check, Clock, ExternalLink, GitBranch, Layers3, Minus, MonitorSmartphone, MoreHorizontal, PanelBottom, PanelLeft, Pencil, Plus, RotateCw, Search, Settings, Sparkles, Square, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Camera, Check, Clock, ExternalLink, GitBranch, Layers3, Minus, MonitorSmartphone, MoreHorizontal, PanelBottom, PanelLeft, Pencil, Plus, RotateCw, Search, Settings, Shield, ShieldOff, Sparkles, Square, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { z } from 'zod'
-import { defaultBrowserSettings, viewportPresetSizes, type BrowserPreview, type BrowserSettings, type DevicesCanvasLayout, type Environment, type TabState, type ViewportPreset, type Workspace } from '../../shared/contracts/browser'
+import { defaultBrowserSettings, viewportPresetSizes, type AdBlockStatus, type BrowserPreview, type BrowserSettings, type DevicesCanvasLayout, type Environment, type TabState, type ViewportPreset, type Workspace } from '../../shared/contracts/browser'
 import { shortcutIdForKeyboardEvent } from '../../shared/shortcuts'
 import { AddressBar } from './components/AddressBar'
 import { CommandPalette } from './components/CommandPalette'
@@ -87,6 +87,48 @@ function themeStyle(settings: BrowserSettings): ThemeStyle {
   }
 }
 
+function AdBlockPopover({ currentUrl, onReload }: { currentUrl: string; onReload: () => void }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [status, setStatus] = useState<AdBlockStatus | null>(null)
+  const [message, setMessage] = useState('')
+  const Icon = status?.enabled && !status.siteAllowed ? Shield : ShieldOff
+
+  const refresh = useCallback(() => {
+    void window.devBrowser.adBlock.getStatus().then((next) => {
+      setStatus(next)
+      setMessage('')
+    }).catch(() => setMessage('AdBlock unavailable'))
+  }, [])
+
+  useEffect(() => { refresh() }, [currentUrl, refresh])
+  useEffect(() => window.devBrowser.network.onEntriesChanged(refresh), [refresh])
+
+  function update(action: Promise<AdBlockStatus>): void {
+    void action.then((next) => {
+      setStatus(next)
+      setMessage('Reload to apply changes.')
+    }).catch((error: unknown) => setMessage(error instanceof Error ? error.message : 'Could not update AdBlock.'))
+  }
+
+  return <div className="adblock-popover">
+    <IconButton className={status?.enabled && !status.siteAllowed ? 'is-active' : ''} icon={Icon} aria-label="AdBlock" title="AdBlock" disabled={!currentUrl} onClick={() => setOpen((value) => !value)} />
+    {open && <div className="adblock-panel" role="dialog" aria-label="AdBlock panel">
+      <div className="adblock-panel-header">
+        <strong>{status?.siteHostname ?? 'Current site'}</strong>
+        <span>{status?.enabled ? status.siteAllowed ? 'Allowed on this site' : 'Blocking active' : 'Disabled in workspace'}</span>
+      </div>
+      <dl className="adblock-stats">
+        <div><dt>This tab</dt><dd>{status?.blockedInTarget ?? 0}</dd></div>
+        <div><dt>Workspace</dt><dd>{status?.blockedInWorkspace ?? 0}</dd></div>
+      </dl>
+      <label className="adblock-toggle"><input type="checkbox" checked={Boolean(status?.enabled)} onChange={(event) => update(window.devBrowser.adBlock.setEnabled(event.target.checked))} />Block ads and trackers</label>
+      <label className="adblock-toggle"><input type="checkbox" checked={Boolean(status?.siteAllowed)} disabled={!status?.siteHostname} onChange={(event) => update(window.devBrowser.adBlock.setSiteAllowed(event.target.checked))} />Allow this site</label>
+      {message && <p className="adblock-message">{message}</p>}
+      <button type="button" className="adblock-reload" onClick={onReload}>Reload page</button>
+    </div>}
+  </div>
+}
+
 function Toolbar({ settings, onOpenHistory, onOpenSettings }: { settings: BrowserSettings; onOpenHistory: () => void; onOpenSettings: () => void }): React.JSX.Element {
   const [status, setStatus] = useState('')
   const activeTab = useTabsStore((state) => state.tabs.find((tab) => tab.id === state.activeTabId))
@@ -112,12 +154,9 @@ function Toolbar({ settings, onOpenHistory, onOpenSettings }: { settings: Browse
         if (!activeTab) await window.devBrowser.tabs.create()
         await browserDom.navigate(address)
       })} />
+      <AdBlockPopover currentUrl={currentUrl} onReload={() => runNavigation(browserDom.reload)} />
       {settings.features.showDownloads && <DownloadsPopover />}
       <AudioCenterPopover />
-      <IconButton icon={ExternalLink} aria-label="Open in system browser" title="Open in system browser" disabled={!currentUrl} onClick={() => {
-        if (!currentUrl) return
-        void window.devBrowser.navigation.openExternal(currentUrl).catch(() => setStatus('Could not open system browser'))
-      }} />
       <IconButton icon={Clock} aria-label="History" title="History" onClick={onOpenHistory} />
       <IconButton icon={MoreHorizontal} aria-label="Settings" title="Settings" onClick={onOpenSettings} />
     </div>

@@ -34,6 +34,7 @@ export function durationLabel(duration: number | undefined): string {
 }
 
 export function statusTone(entry: NetworkEntry): string {
+  if (entry.blockedBy === 'adblock') return 'blocked'
   if (entry.failed || (entry.status !== undefined && entry.status >= 400)) return 'error'
   if (entry.status !== undefined && entry.status >= 300) return 'warning'
   if (entry.status !== undefined && entry.status >= 200) return 'success'

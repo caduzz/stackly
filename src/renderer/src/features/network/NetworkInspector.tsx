@@ -43,12 +43,12 @@ export function NetworkInspector(): React.JSX.Element {
           {visibleEntries.map((entry) => <button
             key={entry.requestId}
             type="button"
-            className={`network-row network-row--request${selectedId === entry.requestId ? ' is-selected' : ''}`}
+            className={`network-row network-row--request${selectedId === entry.requestId ? ' is-selected' : ''}${entry.blockedBy === 'adblock' ? ' is-blocked' : ''}`}
             aria-pressed={selectedId === entry.requestId}
             title={entry.url}
             onClick={() => setSelectedId(entry.requestId)}
           >
-            <span className={`network-status network-status--${statusTone(entry)}`}>{entry.failed ? 'ERR' : entry.status ?? '—'}</span>
+            <span className={`network-status network-status--${statusTone(entry)}`}>{entry.blockedBy === 'adblock' ? 'ADB' : entry.failed ? 'ERR' : entry.status ?? '—'}</span>
             <span>{entry.method}</span>
             <span className="network-path">{requestName(entry.url)}</span>
             <span>{entry.type ?? '—'}</span>

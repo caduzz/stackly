@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { apiRequestIdSchema, apiRequestSchema, apiResponseSchema, apiSendRequestSchema, audioCenterCommandSchema, audioCenterSessionIdSchema, audioCenterSessionSchema, audioCenterTargetSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleEntrySchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, defaultStartupConfig, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, deviceViewSnapshotSchema, downloadEntrySchema, elementNodeIdSchema, elementsSnapshotSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, imageThemeResultSchema, localServiceSchema, navigateSchema, navigationHistoryEntrySchema, navigationHistoryVisitSchema, navigationStateSchema, networkEntrySchema, protectedContentDiagnosticsSchema, screenshotResultSchema, splitViewSchema, startupConfigSchema, storageMutationSchema, storageSnapshotSchema, tabIdSchema, tabOrderSchema, tabsSnapshotSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalDataSchema, terminalExitSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema, workspacesSnapshotSchema, type DevBrowserApi } from '../shared/contracts/browser'
+import { adBlockStatusSchema, apiRequestIdSchema, apiRequestSchema, apiResponseSchema, apiSendRequestSchema, audioCenterCommandSchema, audioCenterSessionIdSchema, audioCenterSessionSchema, audioCenterTargetSchema, browserBoundsSchema, browserChannels, browserSettingsSchema, consoleEntrySchema, consoleExpressionSchema, cookieIdentitySchema, createTabRequestSchema, defaultStartupConfig, deviceDevToolsTargetSchema, devicesCanvasLayoutSchema, deviceViewDescriptorSchema, deviceViewIdSchema, deviceViewSnapshotSchema, downloadEntrySchema, elementNodeIdSchema, elementsSnapshotSchema, environmentConfigSchema, environmentIdSchema, imageThemeRequestSchema, imageThemeResultSchema, localServiceSchema, navigateSchema, navigationHistoryEntrySchema, navigationHistoryVisitSchema, navigationStateSchema, networkEntrySchema, protectedContentDiagnosticsSchema, screenshotResultSchema, splitViewSchema, startupConfigSchema, storageMutationSchema, storageSnapshotSchema, tabIdSchema, tabOrderSchema, tabsSnapshotSchema, tabStateUpdateSchema, tabWebContentsTargetSchema, terminalDataSchema, terminalExitSchema, terminalIdSchema, terminalInputSchema, terminalResizeSchema, viewportPresetSchema, workspaceIdSchema, workspaceNameSchema, workspacesSnapshotSchema, type DevBrowserApi } from '../shared/contracts/browser'
 import { gitBranchOperationSchema, gitBranchSchema, gitChannels, gitCommitRequestSchema, gitCommitResultSchema, gitCommitSchema, gitConnectRepositoryResultSchema, gitFileDiffRequestSchema, gitFileDiffSchema, gitFileOperationSchema, gitRemoteOperationResultSchema, gitRepositorySchema, gitRepositoryStatusCountsSchema, gitStatusSummarySchema } from '../shared/contracts/git'
 import { githubActionsRunListRequestSchema, githubActionsRunPageSchema, githubChannels, githubIssueListRequestSchema, githubIssuePageSchema, githubProviderStatusSchema, githubPullRequestCreateRequestSchema, githubPullRequestCreateResultSchema, githubPullRequestDetailRequestSchema, githubPullRequestDetailSchema, githubPullRequestListRequestSchema, githubPullRequestPageSchema, githubRepositoryMetadataSchema, githubRepositoryRequestSchema } from '../shared/contracts/github'
 
@@ -145,6 +145,17 @@ const api: DevBrowserApi = {
       const handler = (): void => listener()
       ipcRenderer.on(browserChannels.networkChanged, handler)
       return () => ipcRenderer.removeListener(browserChannels.networkChanged, handler)
+    }
+  },
+  adBlock: {
+    getStatus: async () => adBlockStatusSchema.parse(await ipcRenderer.invoke(browserChannels.getAdBlockStatus)),
+    setEnabled: async (enabled) => {
+      if (typeof enabled !== 'boolean') throw new Error('Invalid AdBlock enabled state')
+      return adBlockStatusSchema.parse(await ipcRenderer.invoke(browserChannels.setAdBlockEnabled, enabled))
+    },
+    setSiteAllowed: async (allowed) => {
+      if (typeof allowed !== 'boolean') throw new Error('Invalid AdBlock site exception state')
+      return adBlockStatusSchema.parse(await ipcRenderer.invoke(browserChannels.setAdBlockSiteAllowed, allowed))
     }
   },
   console: {

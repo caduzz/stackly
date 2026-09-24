@@ -28,6 +28,7 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
+    "@ghostery/adblocker-electron": "^2.18.2",
     "@octokit/rest": "^22.0.1",
     "node-pty": "^1.2.0-beta.15",
     "simple-git": "^3.36.0",
@@ -41,7 +42,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "electron": "44.1.0",
+    "electron": "https://github.com/castlabs/electron-releases#v44.1.0+wvcus",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "lucide-react": "^0.468.0",
